@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "scrapbook.application": {
+        "type": "Project",
+        "dependencies": {
+          "ScrapBook.Domain": "[1.0.0, )"
+        }
+      },
+      "scrapbook.domain": {
+        "type": "Project"
+      },
+      "scrapbook.infrastructure": {
+        "type": "Project",
+        "dependencies": {
+          "ScrapBook.Application": "[1.0.0, )",
+          "ScrapBook.Domain": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}
