@@ -58,6 +58,7 @@ Desktop.ini
 packages/
 .nuget/packages/
 .dotnet/
+.local/
 artifacts/
 publish/
 out/
