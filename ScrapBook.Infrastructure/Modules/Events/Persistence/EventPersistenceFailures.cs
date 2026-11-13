@@ -12,10 +12,16 @@ public static class EventPersistenceFailures
     public static EventFailure Translate(Exception error)
     {
         if (error is DbUpdateConcurrencyException) return new(EventFailureKind.VersionConflict);
-        var cause = error is DbUpdateException { InnerException: not null } update ? update.InnerException : error;
+        var cause = error switch
+        {
+            DbUpdateException { InnerException: not null } update => update.InnerException,
+            InvalidOperationException { InnerException: NpgsqlException databaseError } => databaseError,
+            _ => error
+        };
         if (cause is PostgresException postgres)
         {
-            if (postgres.SqlState is "55P03" or "57014" or "40001" or "40P01" or "53300" or "57P01")
+            if (postgres.SqlState.StartsWith("08", StringComparison.Ordinal)
+                || postgres.SqlState is "28000" or "28P01" or "55P03" or "57014" or "40001" or "40P01" or "53300" or "57P01" or "57P02" or "57P03")
                 return new(EventFailureKind.DependencyUnavailable);
             if (postgres.SqlState == "23514" && postgres.ConstraintName is not null
                 && ValidationConstraints.Contains(postgres.ConstraintName))

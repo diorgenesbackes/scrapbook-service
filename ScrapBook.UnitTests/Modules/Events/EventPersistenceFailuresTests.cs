@@ -12,6 +12,10 @@ public sealed class EventPersistenceFailuresTests
     [InlineData("57014")]
     [InlineData("40001")]
     [InlineData("40P01")]
+    [InlineData("28000")]
+    [InlineData("28P01")]
+    [InlineData("08006")]
+    [InlineData("57P03")]
     public void KnownTransientStatesAreSanitizedWithoutRetry(string state)
     {
         var failure = EventPersistenceFailures.Translate(new PostgresException("SYNTHETIC_PRIVATE", "ERROR", "ERROR", state));
@@ -32,4 +36,13 @@ public sealed class EventPersistenceFailuresTests
     [Fact]
     public void OptimisticConflictIsDistinctFromDependencyFailure() =>
         Assert.Equal(EventFailureKind.VersionConflict, EventPersistenceFailures.Translate(new DbUpdateConcurrencyException()).Kind);
+
+    [Fact]
+    public void ProviderWrappedConnectionFailureIsStillSanitized()
+    {
+        var error = new InvalidOperationException("private provider diagnostics",
+            new PostgresException("private connection diagnostics", "FATAL", "FATAL", "57P01"));
+        Assert.Equal(EventFailureKind.DependencyUnavailable, EventPersistenceFailures.Translate(error).Kind);
+        Assert.Equal(EventFailureKind.DependencyUnavailable, ScrapBook.Api.Modules.Events.EventsBoundary.Sanitize(error).Kind);
+    }
 }

@@ -3,10 +3,11 @@ using ScrapBook.Application.Modules.Events;
 
 namespace ScrapBook.Infrastructure.Modules.Events.Persistence;
 
-internal sealed class EventUnitOfWork(EventsDbContext database) : IEventUnitOfWork
+internal sealed class EventUnitOfWork(EventsDbContext database, EventsTelemetry telemetry) : IEventUnitOfWork
 {
     public async Task<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken)
     {
+        using var dependency = telemetry.Dependency("postgresql", "events.sql.transaction");
         try
         {
             await using var transaction = await database.Database.BeginTransactionAsync(cancellationToken);
@@ -14,6 +15,7 @@ internal sealed class EventUnitOfWork(EventsDbContext database) : IEventUnitOfWo
             var result = await action(cancellationToken);
             await database.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+            dependency.Complete();
             return result;
         }
         catch (EventFailure) { throw; }
