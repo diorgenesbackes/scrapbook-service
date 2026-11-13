@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
     <ItemGroup>
+        <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.15" />
         <ProjectReference Include="..\ScrapBook.Application\ScrapBook.Application.csproj" />
         <ProjectReference Include="..\ScrapBook.Infrastructure\ScrapBook.Infrastructure.csproj" />
     </ItemGroup>

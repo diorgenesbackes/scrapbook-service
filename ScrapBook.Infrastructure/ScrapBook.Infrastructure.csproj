@@ -1,5 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
     <ItemGroup>
+        <InternalsVisibleTo Include="ScrapBook.Probes" />
+    </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.15" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.15" />
+        <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+        <PackageReference Include="Npgsql" Version="10.0.3" />
+    </ItemGroup>
+    <ItemGroup>
         <ProjectReference Include="..\ScrapBook.Application\ScrapBook.Application.csproj" />
         <ProjectReference Include="..\ScrapBook.Domain\ScrapBook.Domain.csproj" />
     </ItemGroup>
