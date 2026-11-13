@@ -15,7 +15,7 @@ public sealed class PublicEventOpenApiDocumentTransformer : IOpenApiDocumentTran
         {
             operation.Description = "Consulta anônima e somente leitura. Código base64url canônico de 32 bytes (43 caracteres), " +
                 "sensível a maiúsculas, sem trim. PK não substitui código. Inválido ou ausente: RESOURCE_NOT_FOUND (404). " +
-                "Resposta pública com code, name, effectiveWelcomeMessage e cover padrão permitida. " +
+                "Resposta pública com code, name, effectiveWelcomeMessage, cover padrão e publicUrl canônica (NULL se a origem não foi configurada). " +
                 "Sem janela, dados privados ou autorização de envio. Mensagem efetiva calculada pelo servidor. " +
                 "Sem sessão/cookie obrigatório. Query e body não fazem parte do contrato. Orçamento total 5s; no-store.";
             operation.Security = [];
@@ -44,13 +44,14 @@ public sealed class PublicEventOpenApiDocumentTransformer : IOpenApiDocumentTran
                 {
                     ["code"] = new string('A', 43), ["name"] = "Encontro entre amigos",
                     ["effectiveWelcomeMessage"] = EventPolicy.DefaultWelcomeMessage,
+                    ["publicUrl"] = null,
                     ["cover"] = new JsonObject { ["kind"] = "default", ["assetKey"] = EventPolicy.DefaultCoverAssetKey }
                 };
         }
         if (document.Components?.Schemas?.TryGetValue("PublicEventResponse", out var value) == true && value is OpenApiSchema schema)
         {
             schema.AdditionalPropertiesAllowed = false;
-            schema.Required = new HashSet<string> { "code", "name", "effectiveWelcomeMessage", "cover" };
+            schema.Required = new HashSet<string> { "code", "name", "effectiveWelcomeMessage", "cover", "publicUrl" };
             if (schema.Properties?["effectiveWelcomeMessage"] is OpenApiSchema message)
             {
                 message.MinLength = 1;

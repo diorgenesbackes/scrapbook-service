@@ -25,11 +25,19 @@ namespace ScrapBook.Api.Controllers;
 [ProducesResponseType<ProblemDetails>(415, "application/problem+json")]
 [ProducesResponseType<ProblemDetails>(500, "application/problem+json")]
 [ProducesResponseType<ProblemDetails>(503, "application/problem+json")]
-public sealed class EventController(IEventService service) : ControllerBase
+public sealed class EventController(IEventService service, IEventSharingService sharing) : ControllerBase
 {
     private CurrentActorModel Actor => HttpContext.Items[EventRequestMiddleware.ActorKey] as CurrentActorModel
         ?? throw new EventApplicationException(EventFailureKindEnum.AuthenticationRequired);
     private Guid Correlation => (Guid)HttpContext.Items[EventRequestMiddleware.CorrelationKey]!;
+
+    [HttpGet("{eventId}/share", Name = "GetEventSharing")]
+    [ProducesResponseType<EventSharingResponse>(200)]
+    public async Task<ActionResult<EventSharingResponse>> GetSharingAsync([FromRoute] string eventId)
+    {
+        EventRequestValidator.ValidateQuery(HttpContext);
+        return Ok(await sharing.GetAsync(Actor, EventRequestValidator.Decimal(eventId, "eventId", true), HttpContext.RequestAborted));
+    }
 
     [HttpPost(Name = "CreateEvent")]
     [Consumes("application/json")]
