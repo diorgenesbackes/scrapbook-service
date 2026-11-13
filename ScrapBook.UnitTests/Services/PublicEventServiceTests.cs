@@ -13,10 +13,14 @@ public sealed class PublicEventServiceTests
     [Fact]
     public async Task ReturnsOnlyThePublicProjectionAndPropagatesCancellation()
     {
-        var model = new PublicEventModel(Code);
+        var model = new PublicEventModel(Code, "Public event", null);
         var repository = new PublicEventRepositoryStub(model);
         using var source = new CancellationTokenSource();
-        Assert.Same(model, await new PublicEventService(repository).GetAsync(Code, source.Token));
+        var result = await new PublicEventService(repository).GetAsync(Code, source.Token);
+        Assert.Equal(model.Code, result.Code);
+        Assert.Equal(model.Name, result.Name);
+        Assert.Equal(ScrapBook.Domain.Policies.EventPolicy.DefaultWelcomeMessage, result.EffectiveWelcomeMessage);
+        Assert.Equal(ScrapBook.Domain.Policies.EventPolicy.DefaultCoverAssetKey, result.CoverAssetKey);
         Assert.Equal(1, repository.Calls);
         Assert.Equal(Code, repository.Code);
         Assert.Equal(source.Token, repository.Token);
@@ -42,7 +46,7 @@ public sealed class PublicEventServiceTests
     [Fact]
     public async Task DoesNotNormalizeCaseToFindAnotherIdentifier()
     {
-        var repository = new PublicEventRepositoryStub(new PublicEventModel(Code));
+        var repository = new PublicEventRepositoryStub(new PublicEventModel(Code, "Public event", null));
         await Assert.ThrowsAsync<EventApplicationException>(() => new PublicEventService(repository).GetAsync("a" + Code[1..], default));
         Assert.Equal("a" + Code[1..], repository.Code);
     }

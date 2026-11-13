@@ -148,3 +148,7 @@ A branch principal é `main`. Seguir o [guia de contribuição](https://github.c
 OpenAPI em Development inclui `GetPublicEvent`. Orçamento de 5s, cancelamento propagado e `Cache-Control: no-store`; correlação segura nos headers/erros. O caminho privado `/api/v1/events` preserva suas regras. Scopes automáticos do console ficam desativados para não incluir RequestPath utilizável; os campos explícitos de correlação/tracing permanecem.
 
 Contrato e evidências: [FDD](https://github.com/diorgenesbackes/scrapbook-docs/blob/feature/PP-STORY-001/fdd/FDD-Acesso-Publico-do-Evento/FDD-Acesso-Publico-do-Evento.md). Sem nova migration ou dependência. Nome/capa/mensagem e disponibilidade pertencem às próximas histórias.
+
+## Apresentação pública (PP-STORY-002)
+
+GET /api/v1/public/events/{code} mantém o acesso anônimo e adiciona name, effectiveWelcomeMessage e cover pública permitida. O serviço reutiliza a política de mensagem efetiva da gestão e a referência padrão; o repositório projeta só code/name/welcome_message, sem carregar registros, membros ou mídia privada. O cliente anterior pode continuar usando somente code. A nova UI requer a API atualizada primeiro. Nenhuma migration ou dependência nova.

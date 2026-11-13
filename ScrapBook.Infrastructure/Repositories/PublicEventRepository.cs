@@ -12,7 +12,7 @@ internal sealed class PublicEventRepository(ScrapBookDbContext database, EventTe
     {
         using var dependency = telemetry.Dependency("postgresql", "events.sql.public_get");
         var result = await database.Events.AsNoTracking().Where(row => row.Code == code)
-            .Select(row => new PublicEventModel(row.Code)).SingleOrDefaultAsync(cancellationToken);
+            .Select(row => new PublicEventModel(row.Code, row.Name, row.WelcomeMessage)).SingleOrDefaultAsync(cancellationToken);
         dependency.Complete();
         return result;
     }
