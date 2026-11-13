@@ -1,6 +1,6 @@
 # Scrap Book — Backend
 
-Solution `ScrapBook.sln` em .NET 10. A feature `GE-STORY-001` implementa Gestão de Eventos, com identidade simulada exclusivamente local, PostgreSQL, auditoria e concorrência otimista. `/health` continua independente do banco. Esta branch ainda não foi promovida nem publicada.
+Solution `ScrapBook.sln` em .NET 10. A GE-STORY-001 implementa Gestão de Eventos, com identidade simulada exclusivamente local, PostgreSQL, auditoria e concorrência otimista. `/health` continua independente do banco. A refatoração RF-STORY-001 depende dessa entrega e está em feature/RF-STORY-001; sem promoção/publicação.
 
 ## Requisitos
 
@@ -10,38 +10,44 @@ Solution `ScrapBook.sln` em .NET 10. A feature `GE-STORY-001` implementa Gestão
 
 ## Estrutura e dependências
 
+A RF-STORY-001 substitui a organização modular por Clean Architecture de serviço simples. Todas as classes do mesmo conceito ficam juntas na camada correspondente, com uma classe/record por arquivo e sufixo obrigatório. Não há Modules, Endpoints, reservas de domínios nem subpastas funcionais.
+
 ```text
 ScrapBook.sln
 ScrapBook.Api/
-  Endpoints/                  # health e tradução HTTP
-  Modules/                    # Identity, Events, Records, Notifications
-  Properties/                 # perfis locais de execução
+  Controllers/            # EventController, HealthController (MVC)
+  Middlewares/            # EventRequestMiddleware
+  Readers/ Writers/       # HttpJsonBodyReader, HealthHttpResponseWriter
+  InputFormatters/        # EventMvcJsonInputFormatter
+  DataProtectors/         # EventCursorDataProtector (ASP.NET)
+  Validators/ Options/ Extensions/ Transformers/
 ScrapBook.Application/
-  Modules/                    # casos de uso, portas e resultados por módulo
+  Interfaces/             # IEventService, IEventRepository, IUnitOfWork
+  Services/               # Event, EventCursor, EventTelemetry, DevelopmentCurrentActor
+  Commands/ Exceptions/ Scopes/
 ScrapBook.Domain/
-  Modules/                    # entidades, valores e invariantes por módulo
+  Requests/ Responses/    # records de contrato, sem MVC
+  Entities/               # EventEntity e POCOs PersistenceEntity
+  Mappers/ Readers/       # EventResponseMapper, JsonBodyReader (Stream)
+  Builders/ Models/ Policies/ Exceptions/ Enums/ Clocks/
 ScrapBook.Infrastructure/
-  Modules/                    # persistência e adaptadores por módulo
-ScrapBook.UnitTests/
-  Endpoints/                  # unitários da resposta de saúde
-  Modules/                    # unitários por módulo
+  Repositories/           # EventRepository, AccountRepository
+  DbContexts/             # ScrapBookDbContext único/scoped
+  Configurations/         # configuração EF por entidade
+  Mappers/                # EfPostgresExceptionMapper
+  UnitOfWorks/ Extensions/
+ScrapBook.UnitTests/       # conceitos testados e Stubs
 ```
 
-Todos os projetos ficam diretamente na raiz de `scrapbook-service`, junto da solution, sem diretórios intermediários `src/`, `test/` ou `tests/`.
+Projetos ficam diretamente na raiz, sem src/test intermediários. Domain usa somente bibliotecas base do .NET, sem pacotes nem referências a outros projetos. Services pertencem exclusivamente a Application, que referencia apenas Domain e define portas e regras de coordenação; Infrastructure implementa persistência; API traduz HTTP e compõe a aplicação. EventController usa IEventService, e EventService usa IEventRepository/IUnitOfWork. Repositórios compartilham o mesmo contexto scoped; cinco configurações explícitas mapeiam as tabelas já utilizadas, sem DDL no startup.
 
-Todos os projetos contêm os diretórios `Modules/Identity`, `Modules/Events`, `Modules/Records` e `Modules/Notifications`. Os arquivos `.gitkeep` preservam esses espaços até a implementação das funcionalidades; não representam código de negócio entregue.
+Exemplos obrigatórios de sufixo: Controller, Service, Repository, Entity, Model, Command, Request, Response, Mapper, Validator, Middleware, Configuration, Options, Policy, Clock, Scope, Reader, Writer, Formatter, Transformer, Extensions e Exception. Interfaces usam I e o conceito; enums usam Enum; unitários usam Tests; doubles usam Stub. Program.cs é a entrada/composição convencional.
 
-| Projeto | Referências |
-| --- | --- |
-| Domain | Nenhum outro projeto ou framework de infraestrutura. |
-| Application | Domain. |
-| Infrastructure | Application e Domain. |
-| API | Application e Infrastructure, no ponto de composição. |
-| UnitTests | API e framework ASP.NET Core para testar componentes isolados, sem hospedar servidor HTTP. |
+EF Core 10.0.15, Npgsql/provider 10.0.3 e OpenAPI 10.0.15 permanecem fixados. Os schemas físicos e os propósitos criptográficos/configurações existentes são preservados; não representam módulos de código. A base contém 33 tabelas/47 changesets, sem alteração de histórico nesta refatoração.
 
-Events possui `EventsDbContext`, store e transações próprios; Identity consulta somente a conta ativa por porta interna e contexto separado. EF Core **10.0.15**, Npgsql/provider **10.0.3** e Microsoft.AspNetCore.OpenApi **10.0.15** estão fixados nos projetos/lockfiles. Liquibase é o único executor de DDL; o startup não migra nem prepara dados.
+A lógica do cursor está em Application/EventCursorService, com proteção via IEventCursorProtector e adaptador API/EventCursorDataProtector; propósito Events.List.v1 e validade de 24h preservados. Leitura JSON pura usa Stream em Domain; HttpJsonBodyReader mantém cabeçalhos/limites e tradução dos erros na API. Formatação MVC, OpenAPI, escrita HTTP de health e tradução de exceções EF/PostgreSQL ficam nas camadas técnicas, explicitadas nos nomes. Os testes LayerDependencyTests impedem regressões de dependência/localização dos Services.
 
-A base física existente contém 33 tabelas/47 changesets. Esta feature usa essa base sem alterar migrations. Cognito, convites, Records, galeria, capa customizada e integrações AWS permanecem fora desta entrega.
+A API usa AddControllers/MapControllers com rotas por atributos. Um input formatter mantém JSON estrito, limites e Problem Details. Contratos de Events/health, transações, versão e autorização mantêm a semântica existente. [Decisão e convenções](https://github.com/diorgenesbackes/scrapbook-docs/blob/feature/RF-STORY-001/adr/ADR-001-backend-clean-architecture.md).
 
 ## Restaurar, compilar e testar
 
@@ -89,7 +95,7 @@ npm run dev
 
 Esse comando parte da raiz do workspace. Abra `http://127.0.0.1:5173` e clique em **Verificar backend**. O proxy Vite encaminha `/health` para a API local. Sem a API, a interface informa a falha e permite tentar novamente; cada consulta tem timeout de 5 segundos.
 
-As configurações de proxy estão no [frontend](https://github.com/diorgenesbackes/scrapbook-ui/blob/feature/GE-STORY-001/README.md). HTTP, PostgreSQL, navegador e carga ficam em [scrapbook-tests](https://github.com/diorgenesbackes/scrapbook-tests/blob/feature/GE-STORY-001/README.md), com acionamento manual.
+As configurações de proxy estão no [frontend](https://github.com/diorgenesbackes/scrapbook-ui/blob/feature/GE-STORY-001/README.md). HTTP, PostgreSQL, navegador e carga ficam em [scrapbook-tests](https://github.com/diorgenesbackes/scrapbook-tests/blob/feature/RF-STORY-001/README.md), com acionamento manual.
 
 ## Executar Gestão de Eventos
 
