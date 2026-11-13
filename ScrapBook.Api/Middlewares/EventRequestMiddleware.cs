@@ -20,7 +20,8 @@ public sealed class EventRequestMiddleware(RequestDelegate next, ILogger<EventRe
     public const string CorrelationKey = "ScrapBook.Events.Correlation";
     public async Task InvokeAsync(HttpContext context, ICurrentActorService currentActor, DevelopmentIdentityOptions identity, EventTelemetryService telemetry)
     {
-        if (!context.Request.Path.StartsWithSegments("/api/v1/events") || context.Request.Method == "OPTIONS")
+        var isPublic = context.Request.Path.StartsWithSegments("/api/v1/public/events");
+        if ((!isPublic && !context.Request.Path.StartsWithSegments("/api/v1/events")) || context.Request.Method == "OPTIONS")
         {
             await next(context); return;
         }
@@ -34,11 +35,13 @@ public sealed class EventRequestMiddleware(RequestDelegate next, ILogger<EventRe
             "CreateEvent" => "events.create",
             "ListEvents" => "events.list",
             "GetEvent" => "events.get",
+            "GetPublicEvent" => "events.public_get",
             "UpdateEvent" => "events.update_structure",
             "UpdateEventAccess" => "events.update_access",
             _ => "events.unknown"
         };
-        var route = (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText ?? "/api/v1/events/*";
+        var route = (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText
+            ?? (isPublic ? "/api/v1/public/events/*" : "/api/v1/events/*");
         route = "/" + route.TrimStart('/');
         var start = Stopwatch.GetTimestamp();
         EventFailureKindEnum? failureKind = null;
@@ -52,9 +55,10 @@ public sealed class EventRequestMiddleware(RequestDelegate next, ILogger<EventRe
         context.RequestAborted = budget.Token;
         try
         {
-            DevelopmentOriginValidator.Validate(context, identity);
-            using (var identityDependency = telemetry.Dependency("identity", "identity.resolve"))
+            if (!isPublic)
             {
+                DevelopmentOriginValidator.Validate(context, identity);
+                using var identityDependency = telemetry.Dependency("identity", "identity.resolve");
                 context.Items[ActorKey] = await currentActor.ResolveAsync(budget.Token)
                     ?? throw new EventApplicationException(EventFailureKindEnum.AuthenticationRequired);
                 identityDependency.Complete();

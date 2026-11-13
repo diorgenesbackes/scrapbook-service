@@ -12,7 +12,7 @@ using ScrapBook.Infrastructure.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
-builder.Logging.AddJsonConsole(options => { options.UseUtcTimestamp = true; options.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z'"; options.IncludeScopes = true; });
+builder.Logging.AddJsonConsole(options => { options.UseUtcTimestamp = true; options.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z'"; options.IncludeScopes = false; });
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.None);
 var samplingRate = builder.Configuration.GetValue<double?>("Events:TraceSamplingRate") ?? (builder.Environment.IsDevelopment() ? 1 : 0);
 builder.Services.AddSingleton(_ => new EventTelemetryService(builder.Environment.EnvironmentName,
@@ -27,7 +27,11 @@ builder.Services.AddControllers(options =>
     options.InvalidModelStateResponseFactory = _ => throw EventRequestValidator.Invalid("body", "Revise os campos obrigatórios, tipos e parâmetros da requisição.");
 });
 builder.Services.AddHealthChecks();
-builder.Services.AddOpenApi("v1", options => options.AddDocumentTransformer<EventOpenApiDocumentTransformer>());
+builder.Services.AddOpenApi("v1", options =>
+{
+    options.AddDocumentTransformer<EventOpenApiDocumentTransformer>();
+    options.AddDocumentTransformer<PublicEventOpenApiDocumentTransformer>();
+});
 builder.Services.AddCursorDataProtection(builder.Configuration, builder.Environment);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<BusinessClock>();
@@ -40,10 +44,12 @@ builder.Services.AddDevelopmentIdentity(developmentIdentity.Enabled, development
 builder.Services.AddSingleton<IEventCursorProtector, EventCursorDataProtector>();
 builder.Services.AddSingleton<IEventCursorService, EventCursorService>();
 builder.Services.AddScoped<IEventService, EventService>();
+builder.Services.AddScoped<IPublicEventService, PublicEventService>();
 builder.Services.AddCors(options => options.AddPolicy("EventsLocal", policy => policy
     .WithOrigins(developmentIdentity.AllowedOrigins.Select(origin => origin.TrimEnd('/')).ToArray())
     .WithMethods("GET", "POST", "PUT", "OPTIONS")
-    .WithHeaders("Content-Type", "X-Correlation-Id")));
+    .WithHeaders("Content-Type", "X-Correlation-Id")
+    .WithExposedHeaders("X-Correlation-Id")));
 
 var app = builder.Build();
 app.UseRouting();
