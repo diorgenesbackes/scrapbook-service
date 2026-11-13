@@ -1,3 +1,4 @@
+using ScrapBook.Domain.Clocks;
 using ScrapBook.Application.Services;
 using ScrapBook.Domain.Mappers;
 using ScrapBook.Domain.Models;
@@ -14,8 +15,8 @@ public sealed class PublicEventPresentationServiceTests
     [InlineData(" \r\n ")]
     public async Task UsesTheSameDefaultAsEventManagement(string? input)
     {
-        var model = new PublicEventModel(new string('A', 43), "Encontro", EventPolicy.NormalizeWelcome(input));
-        var result = await new PublicEventService(new PublicEventRepositoryStub(model), new PublicSiteModel(null)).GetAsync(model.Code, default);
+        var model = new PublicEventModel(new string('A', 43), "Encontro", EventPolicy.NormalizeWelcome(input), new DateTime(2030, 1, 1));
+        var result = await new PublicEventService(new PublicEventRepositoryStub(model), new PublicSiteModel(null), new BusinessClock(TimeProvider.System)).GetAsync(model.Code, default);
         Assert.Equal(EventPolicy.DefaultWelcomeMessage, result.EffectiveWelcomeMessage);
         Assert.Equal(EventPolicy.DefaultCoverAssetKey, result.CoverAssetKey);
     }
@@ -25,8 +26,8 @@ public sealed class PublicEventPresentationServiceTests
     {
         var name = EventPolicy.NormalizeName("Álbum 🎉 <evento>");
         var message = EventPolicy.NormalizeWelcome("Olá!\nCompartilhe <script>texto</script> & carinho 🎉");
-        var model = new PublicEventModel(new string('A', 43), name, message);
-        var result = await new PublicEventService(new PublicEventRepositoryStub(model), new PublicSiteModel(null)).GetAsync(model.Code, default);
+        var model = new PublicEventModel(new string('A', 43), name, message, new DateTime(2030, 1, 1));
+        var result = await new PublicEventService(new PublicEventRepositoryStub(model), new PublicSiteModel(null), new BusinessClock(TimeProvider.System)).GetAsync(model.Code, default);
         var response = PublicEventResponseMapper.ToResponse(result);
         Assert.Equal(name, response.Name);
         Assert.Equal(message, response.EffectiveWelcomeMessage);
@@ -39,8 +40,8 @@ public sealed class PublicEventPresentationServiceTests
     {
         var name = EventPolicy.NormalizeName(string.Concat(Enumerable.Repeat("🎉", 120)));
         var message = EventPolicy.NormalizeWelcome(string.Concat(Enumerable.Repeat("🎉", 2000)));
-        var model = new PublicEventModel(new string('A', 43), name, message);
-        var result = await new PublicEventService(new PublicEventRepositoryStub(model), new PublicSiteModel(null)).GetAsync(model.Code, default);
+        var model = new PublicEventModel(new string('A', 43), name, message, new DateTime(2030, 1, 1));
+        var result = await new PublicEventService(new PublicEventRepositoryStub(model), new PublicSiteModel(null), new BusinessClock(TimeProvider.System)).GetAsync(model.Code, default);
         Assert.Equal(name, result.Name);
         Assert.Equal(message, result.EffectiveWelcomeMessage);
     }

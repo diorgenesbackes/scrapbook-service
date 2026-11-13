@@ -158,3 +158,9 @@ GET /api/v1/public/events/{code} mantém o acesso anônimo e adiciona name, effe
 GET /api/v1/events/{eventId}/share retorna code/name/publicUrl somente para responsável vinculado. Os dois slots têm o mesmo acesso. Código público não substitui PK ou identidade. PublicSite:Origin define a origem canônica, nunca Host/Forwarded; HTTPS externo, HTTP loopback com opt-in AllowHttpLoopback. Configuração ausente: 503 SHARING_NOT_CONFIGURED no endpoint privado e publicUrl=null na apresentação pública, sem links inventados. A origem inválida impede startup.
 
 Domain mantém modelo/política/respostas puros; serviço e portas em Application, projeção mínima EF em Infrastructure. Sem nova dependency ou DDL. API/configuração devem ser publicadas antes da UI; não houve publicação externa nesta feature.
+
+## Disponibilidade pública dos envios (PP-STORY-004)
+
+GET público acrescenta serverTime UTC e submissionWindow com state (not_open/open/closed), opensAt/closesAt civis de Brasília, timeZone e revalidateAfterMs (0–30000). PublicEventService amostra BusinessClock.UtcNow uma vez após a consulta; SubmissionWindowPolicy reutiliza EventPolicy.Window. Abertura inclusiva duas horas antes; encerramento exclusivo para novos envios ao meio-dia seguinte. Entre 12h e 13h continua closed: tolerância exige tentativa previamente autorizada, ainda não implementada.
+
+A consulta projeta somente code/name/welcome_message/starts_at e não depende do modo/data da galeria. No-store e orçamento de 5s preservados. Estado público é informativo, nunca autorização de upload. Sem configuração de relógio em produção ou DDL novo. Testes temporais HTTP usam exclusivamente o host de probes em scrapbook-tests; publicar API antes da UI que exige o novo contrato.
