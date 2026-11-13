@@ -1,42 +1,53 @@
-using ScrapBook.Api.Endpoints;
-using ScrapBook.Api.Modules.Events;
-using ScrapBook.Domain.Common;
-using ScrapBook.Api.Modules.Identity;
-using ScrapBook.Infrastructure.Modules.Events;
-using ScrapBook.Infrastructure.Modules.Identity;
-using ScrapBook.Application.Modules.Events;
+using ScrapBook.Api.Extensions;
+using ScrapBook.Api.InputFormatters;
+using ScrapBook.Api.Middlewares;
+using ScrapBook.Api.Options;
+using ScrapBook.Api.Services;
+using ScrapBook.Api.Transformers;
+using ScrapBook.Api.Validators;
+using ScrapBook.Application.Interfaces;
+using ScrapBook.Application.Services;
+using ScrapBook.Domain.Clocks;
+using ScrapBook.Infrastructure.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole(options => { options.UseUtcTimestamp = true; options.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z'"; options.IncludeScopes = true; });
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.None);
 var samplingRate = builder.Configuration.GetValue<double?>("Events:TraceSamplingRate") ?? (builder.Environment.IsDevelopment() ? 1 : 0);
-builder.Services.AddSingleton(_ => new EventsTelemetry(builder.Environment.EnvironmentName,
+builder.Services.AddSingleton(_ => new EventTelemetryService(builder.Environment.EnvironmentName,
     typeof(Program).Assembly.GetName().Version?.ToString() ?? "unknown", samplingRate));
+builder.Services.AddControllers(options =>
+{
+    options.InputFormatters.Clear();
+    options.InputFormatters.Add(new EventJsonInputFormatter());
+    options.SuppressImplicitRequiredAttributeForNonNullableReferenceTypes = true;
+}).ConfigureApiBehaviorOptions(options =>
+{
+    options.InvalidModelStateResponseFactory = _ => throw EventRequestValidator.Invalid("body", "Revise os campos obrigatórios, tipos e parâmetros da requisição.");
+});
 builder.Services.AddHealthChecks();
-builder.Services.AddOpenApi("v1", options => options.AddDocumentTransformer<EventsOpenApi>());
-builder.Services.AddEventsDataProtection(builder.Configuration, builder.Environment);
+builder.Services.AddOpenApi("v1", options => options.AddDocumentTransformer<EventOpenApiDocumentTransformer>());
+builder.Services.AddCursorDataProtection(builder.Configuration, builder.Environment);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<BusinessClock>();
 var developmentIdentity = builder.Configuration.GetSection("DevelopmentIdentity").Get<DevelopmentIdentityOptions>()
     ?? new DevelopmentIdentityOptions();
 developmentIdentity.Validate(builder.Environment, builder.Configuration);
 builder.Services.AddSingleton(developmentIdentity);
-var connectionString = builder.Configuration.GetConnectionString("ScrapBook");
-builder.Services.AddEventsPersistence(connectionString);
-builder.Services.AddDevelopmentIdentity(connectionString, developmentIdentity.Enabled, developmentIdentity.AccountId);
-builder.Services.AddSingleton<IEventCursorCodec, EventCursorCodec>();
-builder.Services.AddScoped<EventService>();
-builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
+builder.Services.AddPersistence(builder.Configuration.GetConnectionString("ScrapBook"));
+builder.Services.AddDevelopmentIdentity(developmentIdentity.Enabled, developmentIdentity.AccountId);
+builder.Services.AddSingleton<IEventCursorService, EventCursorService>();
+builder.Services.AddScoped<IEventService, EventService>();
 builder.Services.AddCors(options => options.AddPolicy("EventsLocal", policy => policy
     .WithOrigins(developmentIdentity.AllowedOrigins.Select(origin => origin.TrimEnd('/')).ToArray())
     .WithMethods("GET", "POST", "PUT", "OPTIONS")
     .WithHeaders("Content-Type", "X-Correlation-Id")));
 
 var app = builder.Build();
+app.UseRouting();
 app.UseCors("EventsLocal");
-app.UseMiddleware<EventsBoundary>();
-app.MapHealthEndpoints();
-app.MapEventEndpoints();
+app.UseMiddleware<EventRequestMiddleware>();
+app.MapControllers();
 if (app.Environment.IsDevelopment()) app.MapOpenApi();
 app.Run();
