@@ -16,6 +16,13 @@ public sealed class EventsOpenApi : IOpenApiDocumentTransformer
         foreach (var (path, item) in document.Paths.Where(entry => entry.Key.StartsWith("/api/v1/events", StringComparison.Ordinal)))
         foreach (var operation in item.Operations?.Values.AsEnumerable() ?? [])
         {
+            operation.Responses ??= new OpenApiResponses();
+            operation.Responses.TryAdd("500", new OpenApiResponse
+            {
+                Description = "UNEXPECTED_ERROR; falha sanitizada. Conferir estado antes de repetir uma escrita.",
+                Content = new Dictionary<string, OpenApiMediaType> { ["application/problem+json"] = new()
+                    { Schema = new OpenApiSchemaReference("ProblemDetails", document) } }
+            });
             operation.Description = "Exige responsável vinculado; recurso alheio e ausente retornam o mesmo 404. " +
                 "Orçamento de 5s incluindo dependências. Respostas sem cache. Nenhum dado de recebimentos é exposto. " +
                 (operation.OperationId == "CreateEvent" ? "Criação confirma evento, membro e auditoria na mesma transação; 201 somente após commit. " : "") +
