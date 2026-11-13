@@ -16,32 +16,38 @@ A RF-STORY-001 substitui a organização modular por Clean Architecture de servi
 ScrapBook.sln
 ScrapBook.Api/
   Controllers/            # EventController, HealthController (MVC)
-  Requests/               # CreateEventRequest, UpdateEventRequest
-  Responses/              # EventResponse, EventPageResponse
   Middlewares/            # EventRequestMiddleware
-  Validators/ Mappers/ Readers/ Writers/ InputFormatters/
-  Options/ Models/ Services/ Extensions/ Transformers/
+  Readers/ Writers/       # HttpJsonBodyReader, HealthHttpResponseWriter
+  InputFormatters/        # EventMvcJsonInputFormatter
+  DataProtectors/         # EventCursorDataProtector (ASP.NET)
+  Validators/ Options/ Extensions/ Transformers/
 ScrapBook.Application/
   Interfaces/             # IEventService, IEventRepository, IUnitOfWork
-  Services/               # EventService, EventTelemetryService
-  Commands/ Models/ Builders/ Exceptions/ Enums/ Scopes/
+  Services/               # Event, EventCursor, EventTelemetry, DevelopmentCurrentActor
+  Commands/ Exceptions/ Scopes/
 ScrapBook.Domain/
-  Entities/ Policies/ Models/ Exceptions/ Enums/ Clocks/
+  Requests/ Responses/    # records de contrato, sem MVC
+  Entities/               # EventEntity e POCOs PersistenceEntity
+  Mappers/ Readers/       # EventResponseMapper, JsonBodyReader (Stream)
+  Builders/ Models/ Policies/ Exceptions/ Enums/ Clocks/
 ScrapBook.Infrastructure/
   Repositories/           # EventRepository, AccountRepository
   DbContexts/             # ScrapBookDbContext único/scoped
   Configurations/         # configuração EF por entidade
-  Entities/ Services/ Mappers/ UnitOfWorks/ Extensions/
+  Mappers/                # EfPostgresExceptionMapper
+  UnitOfWorks/ Extensions/
 ScrapBook.UnitTests/       # conceitos testados e Stubs
 ```
 
-Projetos ficam diretamente na raiz, sem src/test intermediários. Domain não depende de HTTP/EF/AWS. Application define portas e regras de coordenação; Infrastructure implementa persistência; API traduz HTTP e compõe a aplicação. EventController usa IEventService, e EventService usa IEventRepository/IUnitOfWork. Repositórios compartilham o mesmo contexto scoped; cinco configurações explícitas mapeiam as tabelas já utilizadas, sem DDL no startup.
+Projetos ficam diretamente na raiz, sem src/test intermediários. Domain usa somente bibliotecas base do .NET, sem pacotes nem referências a outros projetos. Services pertencem exclusivamente a Application, que referencia apenas Domain e define portas e regras de coordenação; Infrastructure implementa persistência; API traduz HTTP e compõe a aplicação. EventController usa IEventService, e EventService usa IEventRepository/IUnitOfWork. Repositórios compartilham o mesmo contexto scoped; cinco configurações explícitas mapeiam as tabelas já utilizadas, sem DDL no startup.
 
 Exemplos obrigatórios de sufixo: Controller, Service, Repository, Entity, Model, Command, Request, Response, Mapper, Validator, Middleware, Configuration, Options, Policy, Clock, Scope, Reader, Writer, Formatter, Transformer, Extensions e Exception. Interfaces usam I e o conceito; enums usam Enum; unitários usam Tests; doubles usam Stub. Program.cs é a entrada/composição convencional.
 
 EF Core 10.0.15, Npgsql/provider 10.0.3 e OpenAPI 10.0.15 permanecem fixados. Os schemas físicos e os propósitos criptográficos/configurações existentes são preservados; não representam módulos de código. A base contém 33 tabelas/47 changesets, sem alteração de histórico nesta refatoração.
 
-A API agora usa AddControllers/MapControllers com rotas por atributos. Um input formatter mantém JSON estrito, limites e Problem Details. Contratos de Events/health, transações, versão e autorização mantêm a semântica existente. [Decisão e convenções](https://github.com/diorgenesbackes/scrapbook-docs/blob/feature/RF-STORY-001/adr/ADR-001-backend-clean-architecture.md).
+A lógica do cursor está em Application/EventCursorService, com proteção via IEventCursorProtector e adaptador API/EventCursorDataProtector; propósito Events.List.v1 e validade de 24h preservados. Leitura JSON pura usa Stream em Domain; HttpJsonBodyReader mantém cabeçalhos/limites e tradução dos erros na API. Formatação MVC, OpenAPI, escrita HTTP de health e tradução de exceções EF/PostgreSQL ficam nas camadas técnicas, explicitadas nos nomes. Os testes LayerDependencyTests impedem regressões de dependência/localização dos Services.
+
+A API usa AddControllers/MapControllers com rotas por atributos. Um input formatter mantém JSON estrito, limites e Problem Details. Contratos de Events/health, transações, versão e autorização mantêm a semântica existente. [Decisão e convenções](https://github.com/diorgenesbackes/scrapbook-docs/blob/feature/RF-STORY-001/adr/ADR-001-backend-clean-architecture.md).
 
 ## Restaurar, compilar e testar
 

@@ -26,7 +26,7 @@ internal sealed class ScrapBookUnitOfWork(ScrapBookDbContext database, EventTele
         catch (Exception error) when (error is DbUpdateException or Npgsql.NpgsqlException or TimeoutException or OperationCanceledException)
         {
             // Não repetir a transação: a confirmação do commit pode ser desconhecida.
-            throw PersistenceExceptionMapper.Translate(error);
+            throw EfPostgresExceptionMapper.Translate(error);
         }
     }
 }

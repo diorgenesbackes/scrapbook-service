@@ -1,4 +1,4 @@
-using ScrapBook.Application.Enums;
+using ScrapBook.Domain.Enums;
 using ScrapBook.Application.Exceptions;
 using System.Globalization;
 using System.Text.Json;

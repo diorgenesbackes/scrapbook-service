@@ -1,10 +1,9 @@
 using ScrapBook.Api.Options;
 using ScrapBook.Api.Validators;
-using ScrapBook.Application.Enums;
+using ScrapBook.Domain.Enums;
 using ScrapBook.Application.Exceptions;
 using ScrapBook.Application.Interfaces;
 using ScrapBook.Application.Services;
-using ScrapBook.Domain.Enums;
 using ScrapBook.Domain.Exceptions;
 using ScrapBook.Infrastructure.Mappers;
 using System.Diagnostics;
@@ -105,8 +104,8 @@ public sealed class EventRequestMiddleware(RequestDelegate next, ILogger<EventRe
         }, rule.Field is null ? null : new Dictionary<string, string[]> { [rule.Field] = [rule.Message] }),
         BadHttpRequestException { StatusCode: 413 } => new(EventFailureKindEnum.TooLarge),
         BadHttpRequestException or JsonException => new(EventFailureKindEnum.Validation),
-        DbUpdateException or NpgsqlException or TimeoutException or OperationCanceledException => PersistenceExceptionMapper.Translate(error),
-        InvalidOperationException { InnerException: NpgsqlException } => PersistenceExceptionMapper.Translate(error),
+        DbUpdateException or NpgsqlException or TimeoutException or OperationCanceledException => EfPostgresExceptionMapper.Translate(error),
+        InvalidOperationException { InnerException: NpgsqlException } => EfPostgresExceptionMapper.Translate(error),
         _ => new(EventFailureKindEnum.Unexpected)
     };
     private static async Task WriteProblemAsync(HttpContext context, EventApplicationException failure, Guid correlation, CancellationToken token)

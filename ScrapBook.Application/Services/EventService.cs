@@ -1,8 +1,8 @@
 using ScrapBook.Application.Commands;
-using ScrapBook.Application.Enums;
+using ScrapBook.Domain.Enums;
 using ScrapBook.Application.Exceptions;
 using ScrapBook.Application.Interfaces;
-using ScrapBook.Application.Models;
+using ScrapBook.Domain.Models;
 using ScrapBook.Domain.Clocks;
 using ScrapBook.Domain.Policies;
 namespace ScrapBook.Application.Services;

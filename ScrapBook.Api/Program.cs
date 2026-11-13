@@ -1,12 +1,12 @@
+using ScrapBook.Api.DataProtectors;
 using ScrapBook.Api.Extensions;
 using ScrapBook.Api.InputFormatters;
 using ScrapBook.Api.Middlewares;
 using ScrapBook.Api.Options;
-using ScrapBook.Api.Services;
+using ScrapBook.Application.Services;
 using ScrapBook.Api.Transformers;
 using ScrapBook.Api.Validators;
 using ScrapBook.Application.Interfaces;
-using ScrapBook.Application.Services;
 using ScrapBook.Domain.Clocks;
 using ScrapBook.Infrastructure.Extensions;
 
@@ -20,7 +20,7 @@ builder.Services.AddSingleton(_ => new EventTelemetryService(builder.Environment
 builder.Services.AddControllers(options =>
 {
     options.InputFormatters.Clear();
-    options.InputFormatters.Add(new EventJsonInputFormatter());
+    options.InputFormatters.Add(new EventMvcJsonInputFormatter());
     options.SuppressImplicitRequiredAttributeForNonNullableReferenceTypes = true;
 }).ConfigureApiBehaviorOptions(options =>
 {
@@ -37,6 +37,7 @@ developmentIdentity.Validate(builder.Environment, builder.Configuration);
 builder.Services.AddSingleton(developmentIdentity);
 builder.Services.AddPersistence(builder.Configuration.GetConnectionString("ScrapBook"));
 builder.Services.AddDevelopmentIdentity(developmentIdentity.Enabled, developmentIdentity.AccountId);
+builder.Services.AddSingleton<IEventCursorProtector, EventCursorDataProtector>();
 builder.Services.AddSingleton<IEventCursorService, EventCursorService>();
 builder.Services.AddScoped<IEventService, EventService>();
 builder.Services.AddCors(options => options.AddPolicy("EventsLocal", policy => policy

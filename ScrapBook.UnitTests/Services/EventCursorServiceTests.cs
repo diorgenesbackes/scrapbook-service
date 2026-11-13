@@ -1,6 +1,7 @@
-using ScrapBook.Api.Services;
+using ScrapBook.Api.DataProtectors;
+using ScrapBook.Application.Services;
 using ScrapBook.Application.Exceptions;
-using ScrapBook.Application.Models;
+using ScrapBook.Domain.Models;
 using Microsoft.AspNetCore.DataProtection;
 
 namespace ScrapBook.UnitTests.Services;
@@ -12,7 +13,7 @@ public sealed class EventCursorServiceTests
     [Fact]
     public void RoundtripPreservesFullPrecisionAndAccountBinding()
     {
-        var codec = new EventCursorService(provider);
+        var codec = new EventCursorService(new EventCursorDataProtector(provider));
         var cursor = new EventCursorModel(42, new DateTimeOffset(2026, 11, 12, 20, 0, 0, TimeSpan.Zero).AddTicks(1234560), long.MaxValue);
         var token = codec.Encode(cursor);
         Assert.Equal(cursor, codec.Decode(token, 42));
@@ -28,9 +29,9 @@ public sealed class EventCursorServiceTests
         var protector = provider.CreateProtector("Events.List.v1").ToTimeLimitedDataProtector();
         var payload = "{\"V\":" + (kind == 1 ? "2" : "1") + ",\"Order\":\"created_desc_id_desc\",\"AccountId\":42,\"CreatedAt\":\"2026-11-12T20:00:00Z\",\"EventId\":1}";
         var token = protector.Protect(payload, DateTimeOffset.UtcNow.AddSeconds(kind == -1 ? -1 : 60));
-        Assert.Throws<EventApplicationException>(() => new EventCursorService(provider).Decode(token, 42));
+        Assert.Throws<EventApplicationException>(() => new EventCursorService(new EventCursorDataProtector(provider)).Decode(token, 42));
     }
 
     [Fact]
-    public void RejectsOversizedToken() => Assert.Throws<EventApplicationException>(() => new EventCursorService(provider).Decode(new string('x', 2049), 42));
+    public void RejectsOversizedToken() => Assert.Throws<EventApplicationException>(() => new EventCursorService(new EventCursorDataProtector(provider)).Decode(new string('x', 2049), 42));
 }

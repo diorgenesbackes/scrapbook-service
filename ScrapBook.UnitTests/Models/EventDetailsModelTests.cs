@@ -1,4 +1,4 @@
-using ScrapBook.Application.Models;
+using ScrapBook.Domain.Models;
 using ScrapBook.Domain.Clocks;
 using ScrapBook.Domain.Policies;
 using ScrapBook.UnitTests.Providers;

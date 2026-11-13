@@ -5,7 +5,6 @@ using ScrapBook.Application.Interfaces;
 using ScrapBook.Application.Services;
 using ScrapBook.Infrastructure.DbContexts;
 using ScrapBook.Infrastructure.Repositories;
-using ScrapBook.Infrastructure.Services;
 using ScrapBook.Infrastructure.UnitOfWorks;
 
 namespace ScrapBook.Infrastructure.Extensions;

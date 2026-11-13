@@ -1,4 +1,4 @@
-using ScrapBook.Application.Enums;
+using ScrapBook.Domain.Enums;
 namespace ScrapBook.Application.Exceptions;
 
 public sealed class EventApplicationException(EventFailureKindEnum kind, IReadOnlyDictionary<string, string[]>? errors = null)

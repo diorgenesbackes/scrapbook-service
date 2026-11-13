@@ -1,7 +1,6 @@
-using ScrapBook.Application.Enums;
-using ScrapBook.Application.Models;
-using ScrapBook.Domain.Entities;
+using ScrapBook.Domain.Enums;
 using ScrapBook.Domain.Models;
+using ScrapBook.Domain.Entities;
 namespace ScrapBook.Application.Interfaces;
 
 public interface IEventRepository

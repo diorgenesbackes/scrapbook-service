@@ -17,7 +17,7 @@ public sealed class HealthController(HealthCheckService service) : ControllerBas
         Response.Headers.CacheControl = "no-store";
         Response.Headers.Pragma = "no-cache";
         Response.Headers.Expires = "Thu, 01 Jan 1970 00:00:00 GMT";
-        await HealthResponseWriter.WriteAsync(HttpContext, report);
+        await HealthHttpResponseWriter.WriteAsync(HttpContext, report);
         return new EmptyResult();
     }
 }

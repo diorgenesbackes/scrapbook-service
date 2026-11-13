@@ -1,5 +1,5 @@
 using ScrapBook.Infrastructure.Configurations;
-using ScrapBook.Infrastructure.Entities;
+using ScrapBook.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace ScrapBook.Infrastructure.DbContexts;

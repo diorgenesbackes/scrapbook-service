@@ -1,13 +1,11 @@
-using ScrapBook.Application.Builders;
-using ScrapBook.Application.Enums;
+using ScrapBook.Domain.Builders;
+using ScrapBook.Domain.Enums;
 using ScrapBook.Application.Exceptions;
 using ScrapBook.Application.Interfaces;
-using ScrapBook.Application.Models;
+using ScrapBook.Domain.Models;
 using ScrapBook.Application.Services;
 using ScrapBook.Domain.Entities;
-using ScrapBook.Domain.Models;
 using ScrapBook.Infrastructure.DbContexts;
-using ScrapBook.Infrastructure.Entities;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 

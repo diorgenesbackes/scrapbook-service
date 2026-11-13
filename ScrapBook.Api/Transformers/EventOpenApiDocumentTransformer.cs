@@ -1,4 +1,4 @@
-using ScrapBook.Api.Requests;
+using ScrapBook.Domain.Requests;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.OpenApi;

@@ -1,8 +1,8 @@
 using ScrapBook.Api.Middlewares;
 using ScrapBook.Api.Readers;
-using ScrapBook.Api.Requests;
+using ScrapBook.Domain.Requests;
 using ScrapBook.Api.Validators;
-using ScrapBook.Application.Enums;
+using ScrapBook.Domain.Enums;
 using ScrapBook.Application.Exceptions;
 using System.Text;
 using System.Text.Json;
@@ -28,7 +28,7 @@ public sealed class EventRequestTests
     [InlineData("{\"name\":\"Festa\"}")]
     public async Task CreationRejectsUnknownOrMissingFields(string body)
     {
-        var error = await Assert.ThrowsAsync<EventApplicationException>(() => JsonBodyReader.ReadAsync<CreateEventRequest>(Context(body)));
+        var error = await Assert.ThrowsAsync<EventApplicationException>(() => HttpJsonBodyReader.ReadAsync<CreateEventRequest>(Context(body)));
         Assert.Equal(EventFailureKindEnum.Validation, error.Kind);
     }
 
@@ -37,13 +37,13 @@ public sealed class EventRequestTests
     [InlineData("{\"name\":\"Festa\",\"startsAt\":\"2027-05-23T18:30:00\",\"welcomeMessage\":null,\"expectedVersion\":0}")]
     public async Task UpdateDistinguishesNullFromMissingAndRejectsNumericVersion(string body)
     {
-        await Assert.ThrowsAsync<EventApplicationException>(() => JsonBodyReader.ReadAsync<UpdateEventRequest>(Context(body)));
+        await Assert.ThrowsAsync<EventApplicationException>(() => HttpJsonBodyReader.ReadAsync<UpdateEventRequest>(Context(body)));
     }
 
     [Fact]
     public async Task UpdateAcceptsExplicitNullAndPreservesBigint()
     {
-        var result = await JsonBodyReader.ReadAsync<UpdateEventRequest>(Context("""
+        var result = await HttpJsonBodyReader.ReadAsync<UpdateEventRequest>(Context("""
             {"name":"Festa","startsAt":"2027-05-23T18:30:00","welcomeMessage":null,"expectedVersion":"9223372036854775807"}
             """));
         Assert.Null(result.WelcomeMessage);
@@ -63,7 +63,7 @@ public sealed class EventRequestTests
     [InlineData("application/json; charset=utf-16")]
     public async Task WrongMediaTypeFailsBeforeReading(string contentType)
     {
-        var error = await Assert.ThrowsAsync<EventApplicationException>(() => JsonBodyReader.ReadAsync<CreateEventRequest>(Context("{}", contentType)));
+        var error = await Assert.ThrowsAsync<EventApplicationException>(() => HttpJsonBodyReader.ReadAsync<CreateEventRequest>(Context("{}", contentType)));
         Assert.Equal(EventFailureKindEnum.UnsupportedMediaType, error.Kind);
     }
 
@@ -72,7 +72,7 @@ public sealed class EventRequestTests
     {
         var context = Context("{}");
         context.Request.ContentLength = EventRequestValidator.MaxBodyBytes + 1;
-        var error = await Assert.ThrowsAsync<EventApplicationException>(() => JsonBodyReader.ReadAsync<CreateEventRequest>(context));
+        var error = await Assert.ThrowsAsync<EventApplicationException>(() => HttpJsonBodyReader.ReadAsync<CreateEventRequest>(context));
         Assert.Equal(EventFailureKindEnum.TooLarge, error.Kind);
     }
 

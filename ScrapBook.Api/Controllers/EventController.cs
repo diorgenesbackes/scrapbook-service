@@ -1,13 +1,13 @@
 using Microsoft.AspNetCore.Mvc;
-using ScrapBook.Api.Mappers;
+using ScrapBook.Domain.Mappers;
 using ScrapBook.Api.Middlewares;
-using ScrapBook.Api.Requests;
-using ScrapBook.Api.Responses;
+using ScrapBook.Domain.Requests;
+using ScrapBook.Domain.Responses;
 using ScrapBook.Api.Validators;
-using ScrapBook.Application.Enums;
+using ScrapBook.Domain.Enums;
 using ScrapBook.Application.Exceptions;
 using ScrapBook.Application.Interfaces;
-using ScrapBook.Application.Models;
+using ScrapBook.Domain.Models;
 using ScrapBook.Domain.Policies;
 
 namespace ScrapBook.Api.Controllers;

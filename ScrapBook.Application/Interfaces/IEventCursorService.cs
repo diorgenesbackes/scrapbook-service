@@ -1,4 +1,4 @@
-using ScrapBook.Application.Models;
+using ScrapBook.Domain.Models;
 namespace ScrapBook.Application.Interfaces;
 
 public interface IEventCursorService

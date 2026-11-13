@@ -1,5 +1,5 @@
 using ScrapBook.Api.Options;
-using ScrapBook.Application.Enums;
+using ScrapBook.Domain.Enums;
 using ScrapBook.Application.Exceptions;
 namespace ScrapBook.Api.Validators;
 

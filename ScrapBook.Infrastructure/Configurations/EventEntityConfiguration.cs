@@ -1,4 +1,4 @@
-using ScrapBook.Infrastructure.Entities;
+using ScrapBook.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;

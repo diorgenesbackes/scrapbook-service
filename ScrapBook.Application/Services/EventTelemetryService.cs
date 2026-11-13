@@ -1,4 +1,4 @@
-using ScrapBook.Application.Enums;
+using ScrapBook.Domain.Enums;
 using ScrapBook.Application.Scopes;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;

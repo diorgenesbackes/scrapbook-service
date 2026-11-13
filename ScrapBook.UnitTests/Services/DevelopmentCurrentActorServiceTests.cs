@@ -1,4 +1,4 @@
-using ScrapBook.Infrastructure.Services;
+using ScrapBook.Application.Services;
 using ScrapBook.UnitTests.Stubs;
 namespace ScrapBook.UnitTests.Services;
 
