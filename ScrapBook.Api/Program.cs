@@ -8,6 +8,8 @@ using ScrapBook.Api.Transformers;
 using ScrapBook.Api.Validators;
 using ScrapBook.Application.Interfaces;
 using ScrapBook.Domain.Clocks;
+using ScrapBook.Domain.Models;
+using ScrapBook.Domain.Policies;
 using ScrapBook.Infrastructure.Extensions;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -44,6 +46,9 @@ builder.Services.AddDevelopmentIdentity(developmentIdentity.Enabled, development
 builder.Services.AddSingleton<IEventCursorProtector, EventCursorDataProtector>();
 builder.Services.AddSingleton<IEventCursorService, EventCursorService>();
 builder.Services.AddScoped<IEventService, EventService>();
+var publicSite = builder.Configuration.GetSection("PublicSite").Get<PublicSiteOptions>() ?? new PublicSiteOptions();
+builder.Services.AddSingleton(new PublicSiteModel(PublicEventLinkPolicy.NormalizeOrigin(publicSite.Origin, publicSite.AllowHttpLoopback)));
+builder.Services.AddScoped<IEventSharingService, EventSharingService>();
 builder.Services.AddScoped<IPublicEventService, PublicEventService>();
 builder.Services.AddCors(options => options.AddPolicy("EventsLocal", policy => policy
     .WithOrigins(developmentIdentity.AllowedOrigins.Select(origin => origin.TrimEnd('/')).ToArray())

@@ -16,7 +16,7 @@ public sealed class PublicEventServiceTests
         var model = new PublicEventModel(Code, "Public event", null);
         var repository = new PublicEventRepositoryStub(model);
         using var source = new CancellationTokenSource();
-        var result = await new PublicEventService(repository).GetAsync(Code, source.Token);
+        var result = await new PublicEventService(repository, new PublicSiteModel(null)).GetAsync(Code, source.Token);
         Assert.Equal(model.Code, result.Code);
         Assert.Equal(model.Name, result.Name);
         Assert.Equal(ScrapBook.Domain.Policies.EventPolicy.DefaultWelcomeMessage, result.EffectiveWelcomeMessage);
@@ -30,7 +30,7 @@ public sealed class PublicEventServiceTests
     public async Task MissingEventReturnsNotFound()
     {
         var error = await Assert.ThrowsAsync<EventApplicationException>(() =>
-            new PublicEventService(new PublicEventRepositoryStub(null)).GetAsync(Code, default));
+            new PublicEventService(new PublicEventRepositoryStub(null), new PublicSiteModel(null)).GetAsync(Code, default));
         Assert.Equal(EventFailureKindEnum.NotFound, error.Kind);
     }
 
@@ -38,7 +38,7 @@ public sealed class PublicEventServiceTests
     public async Task InvalidCodeDoesNotQueryPersistence()
     {
         var repository = new PublicEventRepositoryStub(null);
-        var error = await Assert.ThrowsAsync<EventApplicationException>(() => new PublicEventService(repository).GetAsync("1", default));
+        var error = await Assert.ThrowsAsync<EventApplicationException>(() => new PublicEventService(repository, new PublicSiteModel(null)).GetAsync("1", default));
         Assert.Equal(EventFailureKindEnum.NotFound, error.Kind);
         Assert.Equal(0, repository.Calls);
     }
@@ -47,7 +47,7 @@ public sealed class PublicEventServiceTests
     public async Task DoesNotNormalizeCaseToFindAnotherIdentifier()
     {
         var repository = new PublicEventRepositoryStub(new PublicEventModel(Code, "Public event", null));
-        await Assert.ThrowsAsync<EventApplicationException>(() => new PublicEventService(repository).GetAsync("a" + Code[1..], default));
+        await Assert.ThrowsAsync<EventApplicationException>(() => new PublicEventService(repository, new PublicSiteModel(null)).GetAsync("a" + Code[1..], default));
         Assert.Equal("a" + Code[1..], repository.Code);
     }
 
@@ -57,7 +57,7 @@ public sealed class PublicEventServiceTests
         var repository = new PublicEventRepositoryStub(null);
         using var source = new CancellationTokenSource();
         source.Cancel();
-        await Assert.ThrowsAsync<OperationCanceledException>(() => new PublicEventService(repository).GetAsync(Code, source.Token));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => new PublicEventService(repository, new PublicSiteModel(null)).GetAsync(Code, source.Token));
         Assert.Equal(0, repository.Calls);
     }
 }

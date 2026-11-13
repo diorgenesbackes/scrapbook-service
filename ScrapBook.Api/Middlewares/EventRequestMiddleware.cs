@@ -36,6 +36,7 @@ public sealed class EventRequestMiddleware(RequestDelegate next, ILogger<EventRe
             "ListEvents" => "events.list",
             "GetEvent" => "events.get",
             "GetPublicEvent" => "events.public_get",
+            "GetEventSharing" => "events.share_get",
             "UpdateEvent" => "events.update_structure",
             "UpdateEventAccess" => "events.update_access",
             _ => "events.unknown"
@@ -126,6 +127,7 @@ public sealed class EventRequestMiddleware(RequestDelegate next, ILogger<EventRe
             EventFailureKindEnum.TooLarge => (413, "Content Too Large", "REQUEST_TOO_LARGE", "A requisição excede o limite de 32 KiB."),
             EventFailureKindEnum.UnsupportedMediaType => (415, "Unsupported Media Type", "UNSUPPORTED_MEDIA_TYPE", "Envie JSON UTF-8 com Content-Type application/json."),
             EventFailureKindEnum.DependencyUnavailable => (503, "Service Unavailable", "DEPENDENCY_UNAVAILABLE", "Não foi possível confirmar a operação. Consulte o estado antes de repetir uma gravação."),
+            EventFailureKindEnum.SharingUnavailable => (503, "Service Unavailable", "SHARING_NOT_CONFIGURED", "O compartilhamento está temporariamente indisponível."),
             _ => (500, "Internal Server Error", "UNEXPECTED_ERROR", "Não foi possível concluir a operação. Se estava salvando, confira o estado antes de repetir.")
         };
         context.Response.StatusCode = status;

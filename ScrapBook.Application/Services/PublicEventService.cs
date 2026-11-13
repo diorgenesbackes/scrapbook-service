@@ -6,7 +6,7 @@ using ScrapBook.Domain.Policies;
 
 namespace ScrapBook.Application.Services;
 
-public sealed class PublicEventService(IPublicEventRepository repository) : IPublicEventService
+public sealed class PublicEventService(IPublicEventRepository repository, PublicSiteModel site) : IPublicEventService
 {
     public async Task<PublicEventPresentationModel> GetAsync(string code, CancellationToken cancellationToken)
     {
@@ -14,6 +14,7 @@ public sealed class PublicEventService(IPublicEventRepository repository) : IPub
         if (!PublicEventCodePolicy.IsValid(code)) throw new EventApplicationException(EventFailureKindEnum.NotFound);
         var model = await repository.GetAsync(code, cancellationToken)
             ?? throw new EventApplicationException(EventFailureKindEnum.NotFound);
-        return new(model.Code, model.Name, EventPolicy.EffectiveWelcomeMessage(model.WelcomeMessage), EventPolicy.DefaultCoverAssetKey);
+        return new(model.Code, model.Name, EventPolicy.EffectiveWelcomeMessage(model.WelcomeMessage), EventPolicy.DefaultCoverAssetKey,
+            PublicEventLinkPolicy.Build(site.Origin, model.Code));
     }
 }
