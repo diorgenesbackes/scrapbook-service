@@ -19,6 +19,7 @@ public static class PersistenceServiceCollectionExtensions
             .EnableSensitiveDataLogging(false).EnableDetailedErrors(false));
         services.AddScoped<IUnitOfWork, ScrapBookUnitOfWork>();
         services.AddScoped<IEventRepository, EventRepository>();
+        services.AddScoped<IPublicEventRepository, PublicEventRepository>();
         services.AddScoped<IAccountRepository, AccountRepository>();
         return services;
     }

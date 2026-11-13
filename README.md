@@ -140,3 +140,11 @@ Chaves de cursor em `Events:CursorKeyPath` (helper: `.local/cursor-keys`) devem 
 ## Contribuição
 
 A branch principal é `main`. Seguir o [guia de contribuição](https://github.com/diorgenesbackes/scrapbook-docs/blob/main/AGENTS.md) e o [Git Flow](https://github.com/diorgenesbackes/scrapbook-docs/blob/main/guidelines/git-flow.md). Versionar manifests e lockfiles; dependências instaladas, artefatos gerados e segredos permanecem locais.
+
+## Acesso público ao evento (PP-STORY-001)
+
+`GET /api/v1/public/events/{code}` consulta anonimamente o código já persistido. Retorna somente `{ "code": "…" }`; código inválido ou inexistente retorna `404 RESOURCE_NOT_FOUND`. Não exige identidade local e não grava dados. Códigos são base64url canônicos de 32 bytes, 43 caracteres, sensíveis a maiúsculas. PK não substitui código nem autoriza gestão.
+
+OpenAPI em Development inclui `GetPublicEvent`. Orçamento de 5s, cancelamento propagado e `Cache-Control: no-store`; correlação segura nos headers/erros. O caminho privado `/api/v1/events` preserva suas regras. Scopes automáticos do console ficam desativados para não incluir RequestPath utilizável; os campos explícitos de correlação/tracing permanecem.
+
+Contrato e evidências: [FDD](https://github.com/diorgenesbackes/scrapbook-docs/blob/feature/PP-STORY-001/fdd/FDD-Acesso-Publico-do-Evento/FDD-Acesso-Publico-do-Evento.md). Sem nova migration ou dependência. Nome/capa/mensagem e disponibilidade pertencem às próximas histórias.
