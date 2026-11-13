@@ -61,6 +61,14 @@ dotnet test ScrapBook.sln --no-build --no-restore
 
 Somente unitários no projeto de testes desta solution. xUnit 2.9.3, Microsoft.NET.Test.Sdk 17.14.1 e runner 3.1.4 estão fixados. Ao alterar dependências intencionalmente, atualizar os lockfiles com `dotnet restore ScrapBook.sln --force-evaluate` e revisar o diff.
 
+## Imagem Docker
+
+A partir deste repositório: `docker build -t scrapbook-service:local .`. O Dockerfile restaura dependências com lockfile e publica em Release no estágio SDK; o runtime ASP.NET 10.0.12/noble executa como app/1654 na porta 8080, com healthcheck GET /health e suporte ao fuso de Brasília. Imagens base estão fixadas por digest. `.dockerignore` exclui Git, bin/obj, configurações locais e chaves.
+
+A stack de `scrapbook-infrastructure/compose.yaml` publica a API em 127.0.0.1:5080 e conecta internamente a postgres:5432, usando somente o runtime DML. O volume cursor_keys preserva Data Protection em /var/lib/scrapbook/cursor-keys. Não há migrations no startup. Preparação/subida/parada: [infraestrutura](https://github.com/diorgenesbackes/scrapbook-infrastructure/blob/feature/6/README.md).
+
+Identidade simulada continua desativada por padrão. Para binding 0.0.0.0 no container local, exige Enabled, AllowContainerBinding e DOTNET_RUNNING_IN_CONTAINER, além de Development, fixture/conexão e origens válidas. O helper stack_local.py aplica esse opt-in por flag; fora de Development, startup é recusado. Isso não habilita identidade de produção.
+
 ## Executar a API
 
 ```bash
