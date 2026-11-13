@@ -29,6 +29,7 @@ public sealed class EventOpenApiDocumentTransformer : IOpenApiDocumentTransforme
                 });
                 operation.Description = "Exige responsável vinculado; recurso alheio e ausente retornam o mesmo 404. " +
                     "Orçamento de 5s incluindo dependências. Respostas sem cache. Nenhum dado de recebimentos é exposto. " +
+                    (operation.OperationId == "GetEventSharing" ? "Consulta de compartilhamento somente leitura; origem configurada, nunca Host/Forwarded. 503 SHARING_NOT_CONFIGURED se ausente. " : "") +
                     (operation.OperationId == "CreateEvent" ? "Criação confirma evento, membro e auditoria na mesma transação; 201 somente após commit. " : "") +
                     (operation.RequestBody is not null ? "JSON UTF-8 de até 32768 bytes. Campos desconhecidos são rejeitados. " : "") +
                     (operation.OperationId?.StartsWith("Update", StringComparison.Ordinal) == true ? "expectedVersion obrigatório; 409 exige reconciliação. " : "");
@@ -66,7 +67,7 @@ public sealed class EventOpenApiDocumentTransformer : IOpenApiDocumentTransforme
             if (value is not OpenApiSchema schema || schema.Properties is null) continue;
             if (name == "ProblemDetails")
             {
-                schema.Properties["code"] = new OpenApiSchema { Type = JsonSchemaType.String, Description = "Código estável: REQUEST_VALIDATION_FAILED, IDENTITY_AUTHENTICATION_REQUIRED, REQUEST_ORIGIN_NOT_ALLOWED, RESOURCE_NOT_FOUND, EVENT_LOCKED, EVENT_OPENING_LOCKED, EVENT_VERSION_CONFLICT, REQUEST_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE, DEPENDENCY_UNAVAILABLE ou UNEXPECTED_ERROR." };
+                schema.Properties["code"] = new OpenApiSchema { Type = JsonSchemaType.String, Description = "Código estável: REQUEST_VALIDATION_FAILED, IDENTITY_AUTHENTICATION_REQUIRED, REQUEST_ORIGIN_NOT_ALLOWED, RESOURCE_NOT_FOUND, EVENT_LOCKED, EVENT_OPENING_LOCKED, EVENT_VERSION_CONFLICT, REQUEST_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE, DEPENDENCY_UNAVAILABLE, SHARING_NOT_CONFIGURED ou UNEXPECTED_ERROR." };
                 schema.Properties["correlationId"] = new OpenApiSchema { Type = JsonSchemaType.String, Format = "uuid" };
                 schema.Properties["traceId"] = new OpenApiSchema { Type = JsonSchemaType.String, Description = "Trace W3C real quando disponível." };
             }

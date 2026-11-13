@@ -20,6 +20,7 @@ public static class PersistenceServiceCollectionExtensions
         services.AddScoped<IUnitOfWork, ScrapBookUnitOfWork>();
         services.AddScoped<IEventRepository, EventRepository>();
         services.AddScoped<IPublicEventRepository, PublicEventRepository>();
+        services.AddScoped<IEventSharingRepository, EventSharingRepository>();
         services.AddScoped<IAccountRepository, AccountRepository>();
         return services;
     }

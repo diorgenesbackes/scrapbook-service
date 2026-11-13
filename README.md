@@ -152,3 +152,9 @@ Contrato e evidências: [FDD](https://github.com/diorgenesbackes/scrapbook-docs/
 ## Apresentação pública (PP-STORY-002)
 
 GET /api/v1/public/events/{code} mantém o acesso anônimo e adiciona name, effectiveWelcomeMessage e cover pública permitida. O serviço reutiliza a política de mensagem efetiva da gestão e a referência padrão; o repositório projeta só code/name/welcome_message, sem carregar registros, membros ou mídia privada. O cliente anterior pode continuar usando somente code. A nova UI requer a API atualizada primeiro. Nenhuma migration ou dependência nova.
+
+## Compartilhamento (PP-STORY-003)
+
+GET /api/v1/events/{eventId}/share retorna code/name/publicUrl somente para responsável vinculado. Os dois slots têm o mesmo acesso. Código público não substitui PK ou identidade. PublicSite:Origin define a origem canônica, nunca Host/Forwarded; HTTPS externo, HTTP loopback com opt-in AllowHttpLoopback. Configuração ausente: 503 SHARING_NOT_CONFIGURED no endpoint privado e publicUrl=null na apresentação pública, sem links inventados. A origem inválida impede startup.
+
+Domain mantém modelo/política/respostas puros; serviço e portas em Application, projeção mínima EF em Infrastructure. Sem nova dependency ou DDL. API/configuração devem ser publicadas antes da UI; não houve publicação externa nesta feature.
