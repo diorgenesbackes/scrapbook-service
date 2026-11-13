@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using ScrapBook.Api.Validators;
 using ScrapBook.Application.Interfaces;
 using ScrapBook.Domain.Responses;
+using ScrapBook.Domain.Mappers;
 
 namespace ScrapBook.Api.Controllers;
 
@@ -23,6 +24,6 @@ public sealed class PublicEventController(IPublicEventService service) : Control
     {
         EventRequestValidator.ValidateQuery(HttpContext);
         var result = await service.GetAsync(code, HttpContext.RequestAborted);
-        return Ok(new PublicEventResponse(result.Code));
+        return Ok(PublicEventResponseMapper.ToResponse(result));
     }
 }

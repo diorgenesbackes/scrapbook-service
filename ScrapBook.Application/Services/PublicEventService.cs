@@ -8,11 +8,12 @@ namespace ScrapBook.Application.Services;
 
 public sealed class PublicEventService(IPublicEventRepository repository) : IPublicEventService
 {
-    public async Task<PublicEventModel> GetAsync(string code, CancellationToken cancellationToken)
+    public async Task<PublicEventPresentationModel> GetAsync(string code, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!PublicEventCodePolicy.IsValid(code)) throw new EventApplicationException(EventFailureKindEnum.NotFound);
-        return await repository.GetAsync(code, cancellationToken)
+        var model = await repository.GetAsync(code, cancellationToken)
             ?? throw new EventApplicationException(EventFailureKindEnum.NotFound);
+        return new(model.Code, model.Name, EventPolicy.EffectiveWelcomeMessage(model.WelcomeMessage), EventPolicy.DefaultCoverAssetKey);
     }
 }

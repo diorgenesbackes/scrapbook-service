@@ -12,6 +12,8 @@ public static class EventPolicy
     public const string DefaultWelcomeMessage = "Seja bem-vindo! Compartilhe uma lembrança deste evento.";
     public const string DefaultCoverAssetKey = "event-cover-default-v1";
 
+    public static string EffectiveWelcomeMessage(string? message) => message ?? DefaultWelcomeMessage;
+
     private static EventRuleException Invalid(string field, string message) =>
         new(EventRuleFailureEnum.Validation, field, message);
 
