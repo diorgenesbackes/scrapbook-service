@@ -4,6 +4,8 @@ using ScrapBook.Api.Validators;
 using ScrapBook.Application.Interfaces;
 using ScrapBook.Domain.Responses;
 using ScrapBook.Domain.Mappers;
+using ScrapBook.Application.Exceptions;
+using ScrapBook.Domain.Enums;
 
 namespace ScrapBook.Api.Controllers;
 
@@ -17,6 +19,15 @@ namespace ScrapBook.Api.Controllers;
 [ProducesResponseType<ProblemDetails>(503, "application/problem+json")]
 public sealed class PublicEventController(IPublicEventService service) : ControllerBase
 {
+    [AllowAnonymous]
+    [HttpGet("", Name = "GetMissingPublicEvent")]
+    [HttpGet("{*invalidCode}", Name = "GetInvalidPublicEvent")]
+    public ActionResult InvalidLink()
+    {
+        EventRequestValidator.ValidateQuery(HttpContext);
+        throw new EventApplicationException(EventFailureKindEnum.NotFound);
+    }
+
     [AllowAnonymous]
     [HttpGet("{code}", Name = "GetPublicEvent")]
     [ProducesResponseType<PublicEventResponse>(200)]

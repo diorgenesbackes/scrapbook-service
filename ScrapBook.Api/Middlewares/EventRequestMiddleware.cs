@@ -35,7 +35,7 @@ public sealed class EventRequestMiddleware(RequestDelegate next, ILogger<EventRe
             "CreateEvent" => "events.create",
             "ListEvents" => "events.list",
             "GetEvent" => "events.get",
-            "GetPublicEvent" => "events.public_get",
+            "GetPublicEvent" or "GetMissingPublicEvent" or "GetInvalidPublicEvent" => "events.public_get",
             "GetEventSharing" => "events.share_get",
             "UpdateEvent" => "events.update_structure",
             "UpdateEventAccess" => "events.update_access",
