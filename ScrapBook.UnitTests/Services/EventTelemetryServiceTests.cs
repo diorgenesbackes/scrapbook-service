@@ -2,6 +2,7 @@ using ScrapBook.Domain.Enums;
 using ScrapBook.Application.Services;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using System.Collections.Concurrent;
 
 namespace ScrapBook.UnitTests.Services;
 
@@ -10,7 +11,7 @@ public sealed class EventTelemetryServiceTests
     [Fact]
     public void MetricsHaveOnlyAggregatedDimensionsAndDependenciesHaveRealSpans()
     {
-        var measurements = new List<(string Name, KeyValuePair<string, object?>[] Tags)>();
+        var measurements = new ConcurrentBag<(string Name, KeyValuePair<string, object?>[] Tags)>();
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, owner) =>
         {

@@ -42,6 +42,8 @@ public sealed class PublicEventOpenApiDocumentTransformer : IOpenApiDocumentTran
                 response.Headers ??= new Dictionary<string, IOpenApiHeader>();
                 response.Headers["X-Correlation-Id"] = new OpenApiHeader { Schema = new OpenApiSchema { Type = JsonSchemaType.String, Format = "uuid" } };
                 response.Headers["Cache-Control"] = new OpenApiHeader { Description = "no-store", Schema = new OpenApiSchema { Type = JsonSchemaType.String } };
+                response.Headers["Referrer-Policy"] = new OpenApiHeader { Description = "no-referrer", Schema = new OpenApiSchema { Type = JsonSchemaType.String } };
+                response.Headers["X-Content-Type-Options"] = new OpenApiHeader { Description = "nosniff", Schema = new OpenApiSchema { Type = JsonSchemaType.String } };
             }
             if (operation.Responses?["200"] is OpenApiResponse success && success.Content is not null)
                 foreach (var media in success.Content.Values) media.Examples = new Dictionary<string, IOpenApiExample>
@@ -61,6 +63,13 @@ public sealed class PublicEventOpenApiDocumentTransformer : IOpenApiDocumentTran
                 message.MaxLength = 2000;
                 message.Description = "Texto seguro de até 2000 valores escalares Unicode; padrão do servidor quando a configuração é NULL. Não interpretar como HTML.";
             }
+        }
+        if (document.Components?.Schemas?.TryGetValue("CoverResponse", out var coverValue) == true && coverValue is OpenApiSchema cover)
+        {
+            cover.AdditionalPropertiesAllowed = false;
+            cover.Required = new HashSet<string> { "kind", "assetKey" };
+            if (cover.Properties?["kind"] is OpenApiSchema kind) kind.Enum = [JsonValue.Create("default")!];
+            if (cover.Properties?["assetKey"] is OpenApiSchema asset) asset.Enum = [JsonValue.Create(EventPolicy.DefaultCoverAssetKey)!];
         }
         if (document.Components?.Schemas?.TryGetValue("PublicSubmissionWindowResponse", out var windowValue) == true && windowValue is OpenApiSchema window)
         {
