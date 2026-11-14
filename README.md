@@ -1,5 +1,11 @@
 # Scrap Book — Backend
 
+## Privacidade da página pública (PP-STORY-006)
+
+A projeção pública continua lendo somente code/name/welcome_message/starts_at, sem entidades administrativas, contribuições ou identidade. Abertura da galeria e existência de registros não alteram seu contrato. Respostas Events têm no-store, no-referrer e nosniff; código/link públicos não substituem ator ou vínculo. Métodos HTTP desconhecidos viram OTHER na telemetria, mantendo dimensões limitadas. Spans próprios não carregam URL/código/SQL; exportadores externos continuam desabilitados.
+
+Validação manual: `python3 public_privacy.py` em scrapbook-tests inspeciona SQL EF real e sinais locais, com fixtures em banco descartável. Não executa upload/S3, Cognito ou galeria. Feature PP-STORY-006 parte da main após pull e incorpora PP-STORY-005 somente como dependência na feature.
+
 Solution `ScrapBook.sln` em .NET 10. A GE-STORY-001 implementa Gestão de Eventos, com identidade simulada exclusivamente local, PostgreSQL, auditoria e concorrência otimista. `/health` continua independente do banco. A refatoração RF-STORY-001 depende dessa entrega e está em feature/RF-STORY-001; sem promoção/publicação.
 
 ## Requisitos

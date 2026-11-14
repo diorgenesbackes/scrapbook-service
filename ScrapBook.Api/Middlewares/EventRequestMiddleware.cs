@@ -30,6 +30,8 @@ public sealed class EventRequestMiddleware(RequestDelegate next, ILogger<EventRe
         context.Items[CorrelationKey] = correlation;
         context.Response.Headers["X-Correlation-Id"] = correlation.ToString();
         context.Response.Headers.CacheControl = "no-store";
+        context.Response.Headers["Referrer-Policy"] = "no-referrer";
+        context.Response.Headers["X-Content-Type-Options"] = "nosniff";
         var operation = context.GetEndpoint()?.Metadata.GetMetadata<IEndpointNameMetadata>()?.EndpointName switch
         {
             "CreateEvent" => "events.create",
@@ -45,6 +47,8 @@ public sealed class EventRequestMiddleware(RequestDelegate next, ILogger<EventRe
             ?? (isPublic ? "/api/v1/public/events/*" : "/api/v1/events/*");
         route = "/" + route.TrimStart('/');
         var start = Stopwatch.GetTimestamp();
+        var method = context.Request.Method is "GET" or "HEAD" or "POST" or "PUT" or "OPTIONS"
+            ? context.Request.Method : "OTHER";
         EventFailureKindEnum? failureKind = null;
         var persistenceFailure = false;
         string? exceptionType = null;
@@ -87,12 +91,12 @@ public sealed class EventRequestMiddleware(RequestDelegate next, ILogger<EventRe
             var durationMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
             activity?.SetTag("http.response.status_code", status);
             activity?.SetStatus(status >= 500 ? ActivityStatusCode.Error : ActivityStatusCode.Ok);
-            telemetry.Record(operation, context.Request.Method, status, outcome, durationMs, failureKind, persistenceFailure);
+            telemetry.Record(operation, method, status, outcome, durationMs, failureKind, persistenceFailure);
             var eventId = failureKind == EventFailureKindEnum.Unexpected ? new EventId(4003, "EventsUnexpectedFailure")
                 : status >= 400 ? new EventId(4002, "EventsRequestRejected") : new EventId(4000, "EventsRequestCompleted");
             logger.Log(status >= 500 ? LogLevel.Error : status >= 400 ? LogLevel.Warning : LogLevel.Information, eventId,
                 "{EventName} {ServiceName} {Component} {Module} {Operation} {HttpMethod} {RouteTemplate} {Status} {Outcome} {DurationMs} {CorrelationId} {TraceId} {SpanId} {RequestId} {ServiceVersion} {Environment} {InstanceId} {ErrorCode} {ExceptionType}",
-                eventId.Name, "scrapbook-backend", "api", "events", operation, context.Request.Method, route, status, outcome, durationMs, correlation,
+                eventId.Name, "scrapbook-backend", "api", "events", operation, method, route, status, outcome, durationMs, correlation,
                 Activity.Current?.IdFormat == ActivityIdFormat.W3C ? Activity.Current.TraceId.ToHexString() : null,
                 Activity.Current?.IdFormat == ActivityIdFormat.W3C ? Activity.Current.SpanId.ToHexString() : null,
                 context.TraceIdentifier, telemetry.Version, telemetry.EnvironmentName, telemetry.InstanceId, failureKind?.ToString(), exceptionType);
