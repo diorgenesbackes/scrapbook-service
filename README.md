@@ -164,3 +164,9 @@ Domain mantém modelo/política/respostas puros; serviço e portas em Applicatio
 GET público acrescenta serverTime UTC e submissionWindow com state (not_open/open/closed), opensAt/closesAt civis de Brasília, timeZone e revalidateAfterMs (0–30000). PublicEventService amostra BusinessClock.UtcNow uma vez após a consulta; SubmissionWindowPolicy reutiliza EventPolicy.Window. Abertura inclusiva duas horas antes; encerramento exclusivo para novos envios ao meio-dia seguinte. Entre 12h e 13h continua closed: tolerância exige tentativa previamente autorizada, ainda não implementada.
 
 A consulta projeta somente code/name/welcome_message/starts_at e não depende do modo/data da galeria. No-store e orçamento de 5s preservados. Estado público é informativo, nunca autorização de upload. Sem configuração de relógio em produção ou DDL novo. Testes temporais HTTP usam exclusivamente o host de probes em scrapbook-tests; publicar API antes da UI que exige o novo contrato.
+
+## Erros e recuperação pública (PP-STORY-005)
+
+GET público sem código, com segmento inválido ou caminhos extras recebe o mesmo 404 RESOURCE_NOT_FOUND/Problem Details de código ausente. Rota simples válida tem precedência sobre catch-all; código malformado não consulta o banco. Headers no-store e correlação UUID seguem o middleware, com operação nominal events.public_get também nos handlers inválidos.
+
+Persistência/conexão/timeout reconhecidos retornam 503 DEPENDENCY_UNAVAILABLE; falha inesperada retorna 500 UNEXPECTED_ERROR. Corpo/logs não incluem mensagem de exceção, SQL, credenciais ou código do evento. ClientAborted não vira Problem Details de negócio. URI/encoding/tamanho recusados pelo transporte antes da API podem ter corpo não JSON e não recebem garantia dos headers da aplicação. Nenhuma dependência/DDL nova; API/Domain/Application mantêm a separação existente.
