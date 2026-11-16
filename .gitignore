@@ -1,0 +1,15 @@
+.DS_Store
+._*
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+*.log
+**/bin/
+**/obj/
+.vs/
+TestResults/
+coverage/
+*.user
+*.suo
