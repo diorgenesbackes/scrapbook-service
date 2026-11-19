@@ -1,8 +1,4 @@
 namespace ScrapBook.Domain.Exceptions;
 
-public sealed class PostgresUnavailableException : Exception
-{
-    public PostgresUnavailableException() : base("PostgreSQL indisponível.")
-    {
-    }
-}
+public sealed class PostgresUnavailableException(Exception? innerException = null)
+    : Exception("PostgreSQL indisponível.", innerException);

@@ -26,7 +26,7 @@ public sealed class DevelopmentIdentityAuthenticationHandlerTests
         }).Build();
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton(DevelopmentIdentityOptions.FromConfiguration(config, true));
+        services.AddSingleton(DevelopmentIdentityOptions.FromConfiguration(config, true, false));
         services.AddAuthentication(DevelopmentIdentityAuthenticationHandler.SchemeName)
             .AddScheme<AuthenticationSchemeOptions, DevelopmentIdentityAuthenticationHandler>(
                 DevelopmentIdentityAuthenticationHandler.SchemeName, _ => { });

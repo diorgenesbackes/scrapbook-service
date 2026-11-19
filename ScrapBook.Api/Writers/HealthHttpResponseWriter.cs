@@ -1,5 +1,5 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using ScrapBook.Api.Responses;
+using ScrapBook.Domain.Responses;
 
 namespace ScrapBook.Api.Writers;
 

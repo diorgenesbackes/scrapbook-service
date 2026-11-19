@@ -8,7 +8,7 @@ public sealed class StartupOptionsTests
     [Fact]
     public void IsDisabledByDefault()
     {
-        var identity = DevelopmentIdentityOptions.FromConfiguration(new ConfigurationBuilder().Build(), false);
+        var identity = DevelopmentIdentityOptions.FromConfiguration(new ConfigurationBuilder().Build(), false, false);
         Assert.False(identity.Enabled);
     }
 
@@ -20,7 +20,7 @@ public sealed class StartupOptionsTests
             ["DevelopmentIdentity:Enabled"] = "true"
         }).Build();
         Assert.Equal("DevelopmentIdentity:Enabled",
-            Assert.Throws<StartupConfigurationException>(() => DevelopmentIdentityOptions.FromConfiguration(settings, false)).OptionName);
+            Assert.Throws<StartupConfigurationException>(() => DevelopmentIdentityOptions.FromConfiguration(settings, false, true)).OptionName);
     }
 
     [Theory]
@@ -34,9 +34,44 @@ public sealed class StartupOptionsTests
             ["DevelopmentIdentity:AccountId"] = accountId,
             ["DevelopmentIdentity:Token"] = new string('a', 64)
         }).Build();
-        var identity = DevelopmentIdentityOptions.FromConfiguration(config, true);
+        var identity = DevelopmentIdentityOptions.FromConfiguration(config, true, false);
         Assert.Equal(expected, identity.Enabled);
         Assert.Equal(expected ? 2 : 0, identity.AccountId);
+    }
+
+    [Theory]
+    [InlineData("urls", "http://localhost:5080;http://[::1]:5081", false, null, true)]
+    [InlineData("urls", "http://0.0.0.0:5080", false, "true", false)]
+    [InlineData("urls", "http://127.0.0.1:5080;http://+:5081", false, null, false)]
+    [InlineData("urls", "http://fixture@localhost:5080", false, null, false)]
+    [InlineData("Kestrel:Endpoints:Http:Url", "http://127.0.0.1:5080", false, null, true)]
+    [InlineData("Kestrel:Endpoints:Http:Url", "http://0.0.0.0:5080", true, null, false)]
+    [InlineData("HTTP_PORTS", "8080", true, "true", true)]
+    [InlineData("HTTP_PORTS", "8080", true, "false", false)]
+    [InlineData("HTTP_PORTS", "8080", true, "invalid", false)]
+    [InlineData("HTTPS_PORTS", "443", false, "true", false)]
+    public void ValidatesEffectiveBindingForDevelopmentIdentity(string bindingKey, string binding, bool isContainer,
+        string? optIn, bool allowed)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [bindingKey] = binding,
+            ["DevelopmentIdentity:Enabled"] = "true",
+            ["DevelopmentIdentity:AllowContainerBinding"] = optIn,
+            ["DevelopmentIdentity:AccountId"] = "42",
+            ["DevelopmentIdentity:Token"] = new string('a', 64)
+        }).Build();
+
+        if (allowed)
+        {
+            Assert.True(DevelopmentIdentityOptions.FromConfiguration(config, true, isContainer).Enabled);
+        }
+        else
+        {
+            var error = Assert.Throws<StartupConfigurationException>(
+                () => DevelopmentIdentityOptions.FromConfiguration(config, true, isContainer));
+            Assert.Equal("DevelopmentIdentity:AllowContainerBinding", error.OptionName);
+        }
     }
 
     [Theory]

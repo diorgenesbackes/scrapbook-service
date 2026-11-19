@@ -3,8 +3,10 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Console;
 using ScrapBook.Api.AuthenticationHandlers;
 using ScrapBook.Api.ExceptionHandlers;
+using ScrapBook.Api.Formatters;
 using ScrapBook.Api.HealthChecks;
 using ScrapBook.Api.Middlewares;
 using ScrapBook.Api.Options;
@@ -19,7 +21,9 @@ DevelopmentIdentityOptions identity;
 try
 {
     database = DatabaseOptions.FromConfiguration(builder.Configuration);
-    identity = DevelopmentIdentityOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment());
+    var isContainer = string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"),
+        "true", StringComparison.OrdinalIgnoreCase);
+    identity = DevelopmentIdentityOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(), isContainer);
 }
 catch (StartupConfigurationException error)
 {
@@ -28,7 +32,12 @@ catch (StartupConfigurationException error)
 }
 
 builder.Logging.ClearProviders();
-builder.Logging.AddJsonConsole(settings => settings.IncludeScopes = true);
+builder.Logging.AddConsole(settings => settings.FormatterName = ScrapBookJsonConsoleFormatter.FormatterName)
+    .AddConsoleFormatter<ScrapBookJsonConsoleFormatter, ConsoleFormatterOptions>();
+if (identity.Enabled)
+{
+    builder.WebHost.ConfigureKestrel(options => options.Configure(builder.Configuration.GetSection("Kestrel"), reloadOnChange: false));
+}
 builder.Services.AddControllers();
 if (builder.Configuration["DataProtection:KeyPath"] is { Length: > 0 } keyPath)
 {

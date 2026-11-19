@@ -25,7 +25,13 @@ public sealed class PostgresReadinessHealthCheck(
         }
         catch (PostgresUnavailableException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return Unavailable("database_unavailable");
+        }
+        catch (PostgresReadinessTimeoutException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Unavailable("database_timeout");
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && budget.IsCancellationRequested)
         {

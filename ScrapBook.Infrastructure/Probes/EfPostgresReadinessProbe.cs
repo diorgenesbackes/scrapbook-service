@@ -40,10 +40,22 @@ public sealed class EfPostgresReadinessProbe(ScrapBookDbContext context) : IPost
         {
             return await context.Database.SqlQueryRaw<bool>(SchemaProbe).SingleAsync(cancellationToken);
         }
-        catch (NpgsqlException)
+        catch (Exception error) when (GetPostgresError(error) is { } postgresError)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            throw new PostgresUnavailableException();
+            if (postgresError.InnerException is TimeoutException)
+            {
+                throw new PostgresReadinessTimeoutException(error);
+            }
+
+            throw new PostgresUnavailableException(error);
         }
     }
+
+    private static NpgsqlException? GetPostgresError(Exception error) => error switch
+    {
+        NpgsqlException postgresError => postgresError,
+        InvalidOperationException { InnerException: NpgsqlException postgresError } => postgresError,
+        _ => null
+    };
 }
