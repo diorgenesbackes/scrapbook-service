@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../ScrapBook.Domain/ScrapBook.Domain.csproj" />
+  </ItemGroup>
+</Project>
