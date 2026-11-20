@@ -90,4 +90,61 @@ public sealed class StartupOptionsTests
         Assert.Equal(expected, error.OptionName);
         Assert.DoesNotContain("local-fixture-secret", error.ToString());
     }
+
+    [Theory]
+    [InlineData("VerifyFull", "/app/certs/rds-us-east-1.pem", "true", null)]
+    [InlineData("Require", "/app/certs/rds-us-east-1.pem", "true", "ConnectionStrings:ScrapBook")]
+    [InlineData("VerifyFull", "/tmp/fixture.pem", "true", "ConnectionStrings:ScrapBook")]
+    [InlineData("Require", "/tmp/fixture.pem", "false", null)]
+    [InlineData("VerifyFull", "/app/certs/rds-us-east-1.pem", "invalid", "Database:RequireTls")]
+    public void ValidatesRdsTlsWhenRequired(string sslMode, string certificate, string required, string? errorOption)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:ScrapBook"] = "Host=db.example.test;Database=scrapbook;Username=scrapbook_app;"
+                + $"Password=fixture-secret;SSL Mode={sslMode};Root Certificate={certificate}",
+            ["Database:RequireTls"] = required
+        }).Build();
+        if (errorOption is null)
+        {
+            Assert.NotEmpty(DatabaseOptions.FromConfiguration(config).ConnectionString);
+        }
+        else
+        {
+            var error = Assert.Throws<StartupConfigurationException>(() => DatabaseOptions.FromConfiguration(config));
+            Assert.Equal(errorOption, error.OptionName);
+            Assert.DoesNotContain("fixture-secret", error.ToString());
+        }
+    }
+
+    [Fact]
+    public void LeavesPublicOriginDisabledByDefault()
+    {
+        Assert.Null(PublicUiOriginOptions.FromConfiguration(new ConfigurationBuilder().Build()).Origin);
+    }
+
+    [Theory]
+    [InlineData("https://ui.hlg.example.test", true)]
+    [InlineData("http://ui.hlg.example.test", false)]
+    [InlineData("https://ui.hlg.example.test:444", false)]
+    [InlineData("https://ui.hlg.example.test/", false)]
+    [InlineData("https://fixture@ui.hlg.example.test", false)]
+    [InlineData("https://127.0.0.1", false)]
+    [InlineData("invalid", false)]
+    public void AcceptsOnlyAnExplicitHttpsOrigin(string value, bool accepted)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [PublicUiOriginOptions.ConfigurationKey] = value
+        }).Build();
+        if (accepted)
+        {
+            Assert.Equal(value, PublicUiOriginOptions.FromConfiguration(config).Origin);
+        }
+        else
+        {
+            Assert.Equal(PublicUiOriginOptions.ConfigurationKey, Assert.Throws<StartupConfigurationException>(
+                () => PublicUiOriginOptions.FromConfiguration(config)).OptionName);
+        }
+    }
 }
