@@ -1,0 +1,100 @@
+name: Recuperar API em homologação
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: ID da publicação bem-sucedida de origem
+        required: true
+        type: string
+      source_attempt:
+        description: Número da tentativa original
+        required: true
+        type: string
+      source_sha:
+        description: SHA completo do artefato conhecido
+        required: true
+        type: string
+      source_version:
+        description: Versão do artefato conhecido
+        required: true
+        type: string
+      expected_task:
+        description: ARN da definição atual do serviço ECS
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-hlg
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: ${{ github.ref == 'refs/heads/hlg' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: hlg
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      SOURCE_ATTEMPT: ${{ inputs.source_attempt }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      SOURCE_VERSION: ${{ inputs.source_version }}
+      EXPECTED_TASK: ${{ inputs.expected_task }}
+      GH_TOKEN: ${{ github.token }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_PAGER: ''
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+      ALB_TARGET_GROUP_ARN: ${{ vars.ALB_TARGET_GROUP_ARN }}
+      DATABASE_GENERATION: ${{ vars.DATABASE_GENERATION }}
+      UI_ORIGIN: ${{ vars.UI_ORIGIN }}
+      RECOVERY_EVIDENCE: ${{ runner.temp }}/recovery-source/release-evidence.json
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Iniciar evidência
+        id: start
+        run: |
+          source .github/scripts/recovery_support.sh
+          start_recovery_evidence
+      - name: Verificar a publicação de origem
+        run: |
+          source .github/scripts/release_support.sh
+          source .github/scripts/recovery_support.sh
+          fetch_recovery_evidence "$(dirname "$RECOVERY_EVIDENCE")"
+      - name: Assumir identidade de homologação por OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          audience: sts.amazonaws.com
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          unset-current-credentials: true
+          role-session-name: recovery-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Restaurar e conferir ativação
+        id: activation
+        run: bash .github/scripts/recover_ecs.sh
+      - name: Registrar resultado
+        if: ${{ always() && steps.start.outcome == 'success' }}
+        env:
+          RECOVERY_RESULT: ${{ job.status }}
+        run: |
+          source .github/scripts/release_support.sh
+          record result "$RECOVERY_RESULT"
+          record finishedAt "$(date -u +%FT%TZ)"
+      - name: Guardar evidência
+        if: ${{ always() && steps.start.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: recovery-${{ github.run_attempt }}
+          path: release-evidence.json
+          if-no-files-found: error
