@@ -18,9 +18,11 @@ using ScrapBook.Infrastructure.Probes;
 var builder = WebApplication.CreateBuilder(args);
 DatabaseOptions database;
 DevelopmentIdentityOptions identity;
+PublicUiOriginOptions ui;
 try
 {
     database = DatabaseOptions.FromConfiguration(builder.Configuration);
+    ui = PublicUiOriginOptions.FromConfiguration(builder.Configuration);
     var isContainer = string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"),
         "true", StringComparison.OrdinalIgnoreCase);
     identity = DevelopmentIdentityOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(), isContainer);
@@ -39,6 +41,16 @@ if (identity.Enabled)
     builder.WebHost.ConfigureKestrel(options => options.Configure(builder.Configuration.GetSection("Kestrel"), reloadOnChange: false));
 }
 builder.Services.AddControllers();
+if (ui.Origin is { } origin)
+{
+    builder.Services.AddCors(options => options.AddPolicy(
+        PublicUiOriginOptions.PolicyName,
+        policy => policy.WithOrigins(origin)
+            .WithMethods(HttpMethods.Get, HttpMethods.Head)
+            .WithHeaders(CorrelationMiddleware.HeaderName)
+            .WithExposedHeaders(CorrelationMiddleware.HeaderName)));
+}
+
 if (builder.Configuration["DataProtection:KeyPath"] is { Length: > 0 } keyPath)
 {
     builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(keyPath));
@@ -61,6 +73,11 @@ var app = builder.Build();
 app.UseRouting();
 app.UseMiddleware<CorrelationMiddleware>();
 app.UseExceptionHandler();
+if (ui.Origin is not null)
+{
+    app.UseCors(PublicUiOriginOptions.PolicyName);
+}
+
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();

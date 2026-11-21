@@ -22,6 +22,17 @@ public sealed class DatabaseOptions
         }
 
         var settings = ParseConnection(source);
+        if (!bool.TryParse(configuration["Database:RequireTls"] ?? "false", out var requireTls))
+        {
+            throw new StartupConfigurationException("Database:RequireTls");
+        }
+
+        if (requireTls && (settings.SslMode != SslMode.VerifyFull
+            || settings.RootCertificate != "/app/certs/rds-us-east-1.pem"))
+        {
+            throw new StartupConfigurationException("ConnectionStrings:ScrapBook");
+        }
+
         var timeoutValue = configuration["Database:ReadinessTimeoutMs"] ?? "2000";
         if (!int.TryParse(timeoutValue, out var timeout) || timeout is < 100 or > 10000)
         {
