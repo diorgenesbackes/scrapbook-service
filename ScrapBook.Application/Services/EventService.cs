@@ -12,14 +12,9 @@ namespace ScrapBook.Application.Services;
 
 public sealed class EventService(IEventRepository repository, IEventCursorCodec cursors, TimeProvider clock)
 {
-    private const string Brasilia = "America/Sao_Paulo";
     private const string CivilDateTime = "yyyy-MM-dd'T'HH:mm:ss";
-    private const string DateFormat = "yyyy-MM-dd";
-    private const string Scheduled = "scheduled";
-    private const string Flexible = "flexible";
     private const string OpeningField = "openingPolicy.opensOn";
     private const string Welcome = "Seja bem-vindo! Compartilhe uma lembrança deste evento.";
-    private static readonly TimeZoneInfo Zone = TimeZoneInfo.FindSystemTimeZoneById(Brasilia);
     private static readonly EventCoverResponse DefaultCover = new("default");
 
     public async Task<EventListResponse> ListAsync(
@@ -36,14 +31,19 @@ public sealed class EventService(IEventRepository repository, IEventCursorCodec 
 
     public async Task<EventResponse> GetAsync(long accountId, string eventId, CancellationToken cancellationToken)
     {
+        var row = await GetLinkedAsync(accountId, ParseEventId(eventId), cancellationToken);
+        return Represent(row, clock.GetUtcNow());
+    }
+
+    internal static long ParseEventId(string eventId)
+    {
         if (!long.TryParse(eventId, NumberStyles.None, CultureInfo.InvariantCulture, out var id)
             || id <= 0 || Decimal(id) != eventId)
         {
             throw new EventRequestValidationException("eventId");
         }
 
-        var row = await GetLinkedAsync(accountId, id, cancellationToken);
-        return Represent(row, clock.GetUtcNow());
+        return id;
     }
 
     public async Task<CreateEventResponse> CreateAsync(
@@ -58,11 +58,10 @@ public sealed class EventService(IEventRepository repository, IEventCursorCodec 
             return await ReplayAsync(accountId, prior, candidate, now, cancellationToken);
         }
 
-        if (candidate.OpensAt is not { } opening
-            || opening.Date <= TimeZoneInfo.ConvertTime(now, Zone).Date
-            || opening <= candidate.SubmissionClosesAt)
+        if (candidate.OpensAt is { } opening)
         {
-            throw new EventRequestValidationException(OpeningField);
+            EventOpeningService.ValidateFutureDate(opening, candidate.SubmissionClosesAt,
+                TimeZoneInfo.ConvertTime(now, EventOpeningService.Zone).DateTime, OpeningField);
         }
 
         var member = new EventMemberEntity { AccountId = accountId, Slot = 1, JoinedAt = now, Event = candidate };
@@ -140,14 +139,20 @@ public sealed class EventService(IEventRepository repository, IEventCursorCodec 
 
         if (!DateTime.TryParseExact(request.StartsAt, CivilDateTime, CultureInfo.InvariantCulture, DateTimeStyles.None,
             out var starts) || starts < DateTime.MinValue.AddHours(2) || starts.Year == DateTime.MaxValue.Year
-            || Zone.IsInvalidTime(starts) || Zone.IsAmbiguousTime(starts))
+            || EventOpeningService.Zone.IsInvalidTime(starts) || EventOpeningService.Zone.IsAmbiguousTime(starts))
         {
             throw new EventRequestValidationException("startsAt");
         }
 
-        var opening = ParseOpening(request.OpeningPolicy, starts);
+        var policy = request.OpeningPolicy;
+        var mode = policy is null ? EventOpeningService.Scheduled
+            : EventOpeningService.ValidateMode(policy.Mode, "openingPolicy.mode");
+        var opening = mode == EventOpeningService.Scheduled && policy?.OpensOn is null
+            ? starts.Date.AddYears(1)
+            : EventOpeningService.ParseDate(mode, policy?.OpensOn, OpeningField);
         var nextDay = starts.Date.AddDays(1);
-        var canonical = JsonSerializer.SerializeToUtf8Bytes(new[] { name, FormatCivil(starts), opening.ToString(DateFormat, CultureInfo.InvariantCulture) });
+        var canonicalOpening = opening?.ToString(EventOpeningService.DateFormat, CultureInfo.InvariantCulture) ?? mode;
+        var canonical = JsonSerializer.SerializeToUtf8Bytes(new[] { name, FormatCivil(starts), canonicalOpening });
         return new EventEntity
         {
             CreatorAccountId = accountId,
@@ -157,46 +162,20 @@ public sealed class EventService(IEventRepository repository, IEventCursorCodec 
             SubmissionOpensAt = starts.AddHours(-2),
             SubmissionClosesAt = nextDay.AddHours(12),
             CompletionDeadlineAt = nextDay.AddHours(13),
-            OpeningMode = Scheduled,
+            OpeningMode = mode,
             OpensAt = opening,
-            AccessState = Flexible,
+            AccessState = EventOpeningService.Flexible,
             CreationKeyHash = keyHash,
             CreationPayloadHash = SHA256.HashData(canonical)
         };
     }
 
-    private static DateTime ParseOpening(CreateEventOpeningRequest? policy, DateTime starts)
+    internal static EventResponse Represent(EventEntity row, DateTimeOffset now)
     {
-        if (policy is not null && policy.Mode != Scheduled)
-        {
-            throw new EventRequestValidationException("openingPolicy.mode");
-        }
-
-        if (policy?.OpensOn is not { } date)
-        {
-            return starts.Date.AddYears(1);
-        }
-
-        return DateTime.TryParseExact(date, DateFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var value)
-            ? value : throw new EventRequestValidationException(OpeningField);
-    }
-
-    private static EventResponse Represent(EventEntity row, DateTimeOffset now)
-    {
-        var local = TimeZoneInfo.ConvertTime(now, Zone).DateTime;
-        var state = row.AccessState;
-        if (state == Flexible && local >= row.SubmissionClosesAt)
-        {
-            state = row.OpeningMode == Scheduled ? "scheduled_locked" : "immediate_once";
-        }
-
-        var closed = row.OpeningMode == Scheduled && row.OpensAt > local;
         return new EventResponse(
-            Decimal(row.Id), Decimal(row.Version), row.Name, FormatCivil(row.StartsAt), Brasilia, DefaultCover,
+            Decimal(row.Id), Decimal(row.Version), row.Name, FormatCivil(row.StartsAt), EventOpeningService.Brasilia, DefaultCover,
             row.WelcomeMessage ?? Welcome, FormatCivil(row.SubmissionOpensAt), FormatCivil(row.SubmissionClosesAt),
-            FormatCivil(row.CompletionDeadlineAt), new EventOpeningResponse(
-                row.OpeningMode, row.OpensAt?.ToString(DateFormat, CultureInfo.InvariantCulture), state,
-                closed ? "closed" : "open", state != "scheduled_locked"),
+            FormatCivil(row.CompletionDeadlineAt), EventOpeningService.Describe(row, now),
             row.LockedAt is null, now);
     }
 

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
+using ScrapBook.Api.Middlewares;
 using ScrapBook.Api.Options;
 using ScrapBook.Api.Readers;
 using ScrapBook.Application.Services;
@@ -13,7 +14,7 @@ namespace ScrapBook.Api.Controllers;
 [ApiController]
 [Route("api/v1/events")]
 public sealed class EventController(
-    EventService events, PublicUiOriginOptions ui, IWebHostEnvironment environment) : ControllerBase
+    EventService events, EventOpeningService opening, PublicUiOriginOptions ui, IWebHostEnvironment environment) : ControllerBase
 {
     [HttpGet(Name = "listEvents")]
     public async Task<EventListResponse> ListAsync(CancellationToken cancellationToken)
@@ -39,6 +40,17 @@ public sealed class EventController(
         var request = await HttpJsonBodyReader.ReadAsync<CreateEventRequest>(Request, cancellationToken);
         var result = await events.CreateAsync(account, keys.Count == 1 ? keys[0] : null, request, cancellationToken);
         return result.IsReplay ? Ok(result.Event) : CreatedAtRoute("getEvent", new { eventId = result.Event.Id }, result.Event);
+    }
+
+    [HttpPut("{eventId}/opening-policy", Name = "replaceEventOpeningPolicy")]
+    [RequestSizeLimit(16 * 1024)]
+    public async Task<EventResponse> ReplaceOpeningAsync(string eventId, CancellationToken cancellationToken)
+    {
+        var account = RequireAccount();
+        VerifyOrigin();
+        var request = await HttpJsonBodyReader.ReadAsync<ReplaceEventOpeningRequest>(Request, cancellationToken);
+        return await opening.ReplaceAsync(account, eventId, request,
+            CorrelationMiddleware.GetCorrelation(HttpContext), cancellationToken);
     }
 
     private long RequireAccount()
