@@ -5,15 +5,18 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Console;
 using ScrapBook.Api.AuthenticationHandlers;
+using ScrapBook.Api.Codecs;
 using ScrapBook.Api.ExceptionHandlers;
 using ScrapBook.Api.Formatters;
 using ScrapBook.Api.HealthChecks;
 using ScrapBook.Api.Middlewares;
 using ScrapBook.Api.Options;
 using ScrapBook.Api.Writers;
+using ScrapBook.Application.Services;
 using ScrapBook.Domain.Interfaces;
 using ScrapBook.Infrastructure.Persistence;
 using ScrapBook.Infrastructure.Probes;
+using ScrapBook.Infrastructure.Repositories;
 
 var builder = WebApplication.CreateBuilder(args);
 DatabaseOptions database;
@@ -46,14 +49,15 @@ if (ui.Origin is { } origin)
     builder.Services.AddCors(options => options.AddPolicy(
         PublicUiOriginOptions.PolicyName,
         policy => policy.WithOrigins(origin)
-            .WithMethods(HttpMethods.Get, HttpMethods.Head)
-            .WithHeaders(CorrelationMiddleware.HeaderName)
+            .WithMethods(HttpMethods.Get, HttpMethods.Head, HttpMethods.Post)
+            .WithHeaders(CorrelationMiddleware.HeaderName, "Content-Type", "Idempotency-Key")
             .WithExposedHeaders(CorrelationMiddleware.HeaderName)));
 }
 
+var protection = builder.Services.AddDataProtection();
 if (builder.Configuration["DataProtection:KeyPath"] is { Length: > 0 } keyPath)
 {
-    builder.Services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(keyPath));
+    protection.PersistKeysToFileSystem(new DirectoryInfo(keyPath));
 }
 
 builder.Services.AddProblemDetails();
@@ -61,8 +65,13 @@ builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.Configure<ExceptionHandlerOptions>(options => options.SuppressDiagnosticsCallback = _ => true);
 builder.Services.AddSingleton(database);
 builder.Services.AddSingleton(identity);
+builder.Services.AddSingleton(ui);
 builder.Services.AddDbContext<ScrapBookDbContext>(options => options.UseNpgsql(database.ConnectionString));
 builder.Services.AddScoped<IPostgresReadinessProbe, EfPostgresReadinessProbe>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<IEventCursorCodec, EventCursorCodec>();
+builder.Services.AddScoped<IEventRepository, EventRepository>();
+builder.Services.AddScoped<EventService>();
 builder.Services.AddAuthentication(DevelopmentIdentityAuthenticationHandler.SchemeName)
     .AddScheme<AuthenticationSchemeOptions, DevelopmentIdentityAuthenticationHandler>(
         DevelopmentIdentityAuthenticationHandler.SchemeName, _ => { });
