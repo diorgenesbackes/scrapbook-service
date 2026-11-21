@@ -6,10 +6,18 @@ source .github/scripts/release_ecs.sh
 : "${ECS_CLUSTER:?}" "${ECS_SERVICE:?}" "${ALB_TARGET_GROUP_ARN:?}" "${DATABASE_GENERATION:?}" "${UI_ORIGIN:?}"
 ensure_current_revision
 migration=$(aws ssm get-parameter --name /scrapbook/hlg/liquibase/active --query Parameter.Value --output text)
-jq -e --arg generation "$DATABASE_GENERATION" \
-    '.environment == "hlg" and .generation == $generation and .result == "success"' <<< "$migration" >/dev/null
-record databaseVersion "$(jq -er .version <<< "$migration")"
-record databaseRevision "$(jq -er .sha <<< "$migration")"
+migration_provenance=$(jq -er --arg generation "$DATABASE_GENERATION" '
+    select(type == "object" and .environment == "hlg" and .generation == $generation and .result == "success")
+    | select(.version | strings | test("^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)\\z"))
+    | select(.sha | strings | test("^[0-9a-f]{40}\\z"))
+    | [.version, .sha] | @tsv
+' <<< "$migration") || {
+    echo "O marcador de migração deve identificar a geração, a versão e o SHA concluídos em homologação." >&2
+    exit 1
+}
+IFS=$'\t' read -r database_version database_revision <<< "$migration_provenance"
+record databaseVersion "$database_version"
+record databaseRevision "$database_revision"
 record databaseGeneration "$DATABASE_GENERATION"
 
 service=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --output json |

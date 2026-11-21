@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 
+verify_reservation() {
+    local current_key="${GITHUB_RUN_ID:?}.${GITHUB_RUN_ATTEMPT:?}"
+    if [[ "${RESERVED_RUN_KEY:-}" != "$current_key" ]]; then
+        echo "A reserva pertence a outra tentativa. Reexecute todos os jobs para reservar uma nova versão." >&2
+        return 1
+    fi
+}
+
 start_evidence() {
-    : "${RELEASE_VERSION:?}" "${GITHUB_SHA:?}" "${GITHUB_REPOSITORY:?}" "${GITHUB_RUN_ID:?}" "${GITHUB_RUN_ATTEMPT:?}"
+    verify_reservation || return 1
+    : "${RELEASE_VERSION:?}" "${GITHUB_SHA:?}" "${GITHUB_REPOSITORY:?}"
     jq -n --arg sha "$GITHUB_SHA" --arg version "$RELEASE_VERSION" --arg repository "$GITHUB_REPOSITORY" \
         --arg runId "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
         --arg time "$(date -u +%FT%TZ)" \

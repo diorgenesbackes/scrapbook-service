@@ -18,6 +18,7 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.reserve.outputs.version }}
+      run_key: ${{ steps.reserve.outputs.run_key }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
       - name: Reservar a versão
@@ -38,6 +39,7 @@ jobs:
       id-token: write
     env:
       RELEASE_VERSION: ${{ needs.reserve.outputs.version }}
+      RESERVED_RUN_KEY: ${{ needs.reserve.outputs.run_key }}
       AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
       AWS_DEFAULT_REGION: us-east-1
       AWS_PAGER: ''
@@ -84,6 +86,6 @@ jobs:
         if: ${{ always() && steps.start.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: release-${{ needs.reserve.outputs.version }}
+          name: release-${{ needs.reserve.outputs.version }}-${{ github.run_attempt }}
           path: release-evidence.json
           if-no-files-found: error

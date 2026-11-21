@@ -80,7 +80,7 @@ def main():
         return 1
     if output := os.environ.get("GITHUB_OUTPUT"):
         with open(output, "a", encoding="utf-8") as destination:
-            destination.write(f"version={version}\n")
+            destination.write(f"version={version}\nrun_key={args.run_key}\n")
     print(version)
     return 0
 
