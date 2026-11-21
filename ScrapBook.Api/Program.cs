@@ -49,7 +49,7 @@ if (ui.Origin is { } origin)
     builder.Services.AddCors(options => options.AddPolicy(
         PublicUiOriginOptions.PolicyName,
         policy => policy.WithOrigins(origin)
-            .WithMethods(HttpMethods.Get, HttpMethods.Head, HttpMethods.Post)
+            .WithMethods(HttpMethods.Get, HttpMethods.Head, HttpMethods.Post, HttpMethods.Put)
             .WithHeaders(CorrelationMiddleware.HeaderName, "Content-Type", "Idempotency-Key")
             .WithExposedHeaders(CorrelationMiddleware.HeaderName)));
 }
@@ -71,6 +71,8 @@ builder.Services.AddScoped<IPostgresReadinessProbe, EfPostgresReadinessProbe>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IEventCursorCodec, EventCursorCodec>();
 builder.Services.AddScoped<IEventRepository, EventRepository>();
+builder.Services.AddScoped<IEventOpeningRepository, EventOpeningRepository>();
+builder.Services.AddScoped<EventOpeningService>();
 builder.Services.AddScoped<EventService>();
 builder.Services.AddAuthentication(DevelopmentIdentityAuthenticationHandler.SchemeName)
     .AddScheme<AuthenticationSchemeOptions, DevelopmentIdentityAuthenticationHandler>(
