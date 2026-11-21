@@ -31,6 +31,13 @@ public sealed class EventController(
         return await events.GetAsync(account, eventId, cancellationToken);
     }
 
+    [HttpGet("{eventId}/opening-status", Name = "getEventOpeningStatus")]
+    public async Task<EventOpeningStatusResponse> GetOpeningStatusAsync(string eventId, CancellationToken cancellationToken)
+    {
+        var account = RequireAccount();
+        return await events.GetOpeningStatusAsync(account, eventId, cancellationToken);
+    }
+
     [HttpPost(Name = "createEvent")]
     [RequestSizeLimit(16 * 1024)]
     public async Task<IActionResult> CreateAsync(CancellationToken cancellationToken)

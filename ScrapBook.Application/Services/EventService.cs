@@ -35,6 +35,13 @@ public sealed class EventService(IEventRepository repository, IEventCursorCodec 
         return Represent(row, clock.GetUtcNow());
     }
 
+    public async Task<EventOpeningStatusResponse> GetOpeningStatusAsync(
+        long accountId, string eventId, CancellationToken cancellationToken)
+    {
+        var row = await GetLinkedAsync(accountId, ParseEventId(eventId), cancellationToken);
+        return EventOpeningService.DescribeContent(row, clock.GetUtcNow());
+    }
+
     internal static long ParseEventId(string eventId)
     {
         if (!long.TryParse(eventId, NumberStyles.None, CultureInfo.InvariantCulture, out var id)
