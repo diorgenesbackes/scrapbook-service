@@ -53,7 +53,8 @@ public sealed class EventServiceTests
     [InlineData("", "2032-02-29T01:30:00", null, null, "name")]
     [InlineData("Nome", "2032-02-29T01:30:00-03:00", null, null, "startsAt")]
     [InlineData("Nome", "2029-02-29T01:30:00", null, null, "startsAt")]
-    [InlineData("Nome", "2032-02-29T01:30:00", "immediate", null, "openingPolicy.mode")]
+    [InlineData("Nome", "2032-02-29T01:30:00", "other", null, "openingPolicy.mode")]
+    [InlineData("Nome", "2032-02-29T01:30:00", "immediate", "2033-02-28", "openingPolicy.opensOn")]
     [InlineData("Nome", "2032-02-29T01:30:00", "scheduled", "2032-03-01", "openingPolicy.opensOn")]
     [InlineData("Nome", "2032-02-29T01:30:00", "scheduled", "2033-02-30", "openingPolicy.opensOn")]
     public async Task RefusesInvalidCreation(string name, string startsAt, string? mode, string? date, string field)
@@ -76,6 +77,19 @@ public sealed class EventServiceTests
             () => Service.CreateAsync(9, Guid.Empty.ToString(), Request, token))).Field);
         var emoji = Request with { Name = string.Concat(Enumerable.Repeat("🎉", 120)) };
         Assert.Equal(emoji.Name, (await Service.CreateAsync(9, Key.ToString(), emoji, token)).Event.Name);
+    }
+
+    [Fact]
+    public async Task CreatesImmediateOpeningAndKeepsItsReplayDistinctFromScheduled()
+    {
+        var immediate = Request with { OpeningPolicy = new("immediate", null) };
+        var result = await Service.CreateAsync(9, Key.ToString(), immediate, CancellationToken.None);
+        Assert.Equal("immediate", result.Event.OpeningPolicy.Mode);
+        Assert.Equal("open", result.Event.OpeningPolicy.ContentState);
+        Assert.Null(result.Event.OpeningPolicy.OpensOn);
+        Assert.True((await Service.CreateAsync(9, Key.ToString(), immediate, CancellationToken.None)).IsReplay);
+        await Assert.ThrowsAsync<EventCreationKeyReusedException>(
+            () => Service.CreateAsync(9, Key.ToString(), Request, CancellationToken.None));
     }
 
     [Fact]
