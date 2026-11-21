@@ -95,9 +95,22 @@ public sealed class EventOpeningService(IEventWriteRepository repository, TimePr
     {
         var local = TimeZoneInfo.ConvertTime(now, Zone).DateTime;
         var state = EffectiveState(item, local);
-        var closed = item.OpeningMode == Scheduled && item.OpensAt > local;
         return new EventOpeningResponse(item.OpeningMode, FormatDate(item.OpensAt), state,
-            closed ? "closed" : "open", state != ScheduledLocked);
+            DescribeContent(item, now).ContentState, state != ScheduledLocked);
+    }
+
+    internal static EventOpeningStatusResponse DescribeContent(EventEntity item, DateTimeOffset now)
+    {
+        var opensAt = item.OpeningMode == Scheduled && item.OpensAt is { } date ? OpeningInstant(date) : (DateTimeOffset?)null;
+        return new EventOpeningStatusResponse(opensAt > now ? "closed" : "open", FormatDate(item.OpensAt), opensAt, now);
+    }
+
+    private static DateTimeOffset OpeningInstant(DateTime date)
+    {
+        var offset = Zone.IsInvalidTime(date) ? Zone.GetUtcOffset(date.AddDays(-1))
+            : Zone.IsAmbiguousTime(date) ? Zone.GetAmbiguousTimeOffsets(date).Max()
+            : Zone.GetUtcOffset(date);
+        return new DateTimeOffset(date, offset).ToUniversalTime();
     }
 
     internal static long ParseVersion(string? value) =>

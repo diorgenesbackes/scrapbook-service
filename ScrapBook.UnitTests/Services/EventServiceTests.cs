@@ -92,6 +92,61 @@ public sealed class EventServiceTests
             () => Service.CreateAsync(9, Key.ToString(), Request, CancellationToken.None));
     }
 
+    [Theory]
+    [InlineData("2033-02-28T02:59:59.999Z", "closed")]
+    [InlineData("2033-02-28T03:00:00Z", "open")]
+    [InlineData("2033-02-28T03:00:00.001Z", "open")]
+    public async Task DescribesTheContentAtBrasiliaMidnight(string utc, string expected)
+    {
+        var token = CancellationToken.None;
+        await Service.CreateAsync(9, Key.ToString(), Request, token);
+        clock.Now = DateTimeOffset.Parse(utc);
+
+        var result = await Service.GetOpeningStatusAsync(9, "11", token);
+
+        Assert.Equal(expected, result.ContentState);
+        Assert.Equal("2033-02-28", result.OpensOn);
+        Assert.Equal(DateTimeOffset.Parse("2033-02-28T03:00:00Z"), result.OpensAt);
+        Assert.Equal(clock.Now, result.ServerTime);
+        Assert.Equal(expected, (await Service.GetAsync(9, "11", token)).OpeningPolicy.ContentState);
+    }
+
+    [Fact]
+    public async Task OpensAtTheFirstValidInstantWhenHistoricalDaylightSavingSkippedMidnight()
+    {
+        var token = CancellationToken.None;
+        clock.Now = DateTimeOffset.Parse("2018-01-01T00:00:00Z");
+        await Service.CreateAsync(9, Key.ToString(), new("Evento anterior", "2018-11-01T16:00:00",
+            new("scheduled", "2018-11-04")), token);
+
+        clock.Now = DateTimeOffset.Parse("2018-11-04T02:59:59Z");
+        var before = await Service.GetOpeningStatusAsync(9, "11", token);
+        Assert.Equal("closed", before.ContentState);
+        Assert.Equal(DateTimeOffset.Parse("2018-11-04T03:00:00Z"), before.OpensAt);
+
+        clock.Now = clock.Now.AddSeconds(1);
+        Assert.Equal("open", (await Service.GetOpeningStatusAsync(9, "11", token)).ContentState);
+    }
+
+    [Fact]
+    public async Task RechecksCurrentPolicyAndMembershipOnEveryOpeningStatusRequest()
+    {
+        var token = CancellationToken.None;
+        await Service.CreateAsync(9, Key.ToString(), Request with { OpeningPolicy = new("immediate", null) }, token);
+
+        var immediate = await Service.GetOpeningStatusAsync(9, "11", token);
+        Assert.Equal("open", immediate.ContentState);
+        Assert.Null(immediate.OpensOn);
+        Assert.Null(immediate.OpensAt);
+
+        repository.Event!.OpeningMode = "scheduled";
+        repository.Event.OpensAt = new DateTime(2033, 2, 28);
+        Assert.Equal("closed", (await Service.GetOpeningStatusAsync(9, "11", token)).ContentState);
+        await Assert.ThrowsAsync<EventNotFoundException>(() => Service.GetOpeningStatusAsync(19, "11", token));
+        repository.Member = null;
+        await Assert.ThrowsAsync<EventNotFoundException>(() => Service.GetOpeningStatusAsync(9, "11", token));
+    }
+
     [Fact]
     public async Task ListsWithAnAccountBoundBoundaryAndChecksDetailScope()
     {
