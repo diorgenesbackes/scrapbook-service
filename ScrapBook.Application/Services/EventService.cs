@@ -131,37 +131,31 @@ public sealed class EventService(IEventRepository repository, IEventCursorCodec 
 
     private static EventEntity PrepareCreation(long accountId, CreateEventRequest request, byte[] keyHash)
     {
-        var name = request.Name?.Trim();
-        if (name is null || name.EnumerateRunes().Count() is < 1 or > 120 || name.Contains('\0'))
-        {
-            throw new EventRequestValidationException("name");
-        }
-
-        if (!DateTime.TryParseExact(request.StartsAt, CivilDateTime, CultureInfo.InvariantCulture, DateTimeStyles.None,
-            out var starts) || starts < DateTime.MinValue.AddHours(2) || starts.Year == DateTime.MaxValue.Year
-            || EventOpeningService.Zone.IsInvalidTime(starts) || EventOpeningService.Zone.IsAmbiguousTime(starts))
-        {
-            throw new EventRequestValidationException("startsAt");
-        }
-
+        var name = ParseName(request.Name);
+        var starts = ParseStartsAt(request.StartsAt);
+        var welcome = ParseWelcome(request.WelcomeMessage);
+        var (opens, closes, deadline) = CalculateSubmissionWindow(starts);
         var policy = request.OpeningPolicy;
         var mode = policy is null ? EventOpeningService.Scheduled
             : EventOpeningService.ValidateMode(policy.Mode, "openingPolicy.mode");
         var opening = mode == EventOpeningService.Scheduled && policy?.OpensOn is null
             ? starts.Date.AddYears(1)
             : EventOpeningService.ParseDate(mode, policy?.OpensOn, OpeningField);
-        var nextDay = starts.Date.AddDays(1);
         var canonicalOpening = opening?.ToString(EventOpeningService.DateFormat, CultureInfo.InvariantCulture) ?? mode;
-        var canonical = JsonSerializer.SerializeToUtf8Bytes(new[] { name, FormatCivil(starts), canonicalOpening });
+        string[] fingerprint = welcome is null
+            ? [name, FormatCivil(starts), canonicalOpening]
+            : [name, FormatCivil(starts), canonicalOpening, welcome];
+        var canonical = JsonSerializer.SerializeToUtf8Bytes(fingerprint);
         return new EventEntity
         {
             CreatorAccountId = accountId,
             Code = string.Empty,
             Name = name,
+            WelcomeMessage = welcome,
             StartsAt = starts,
-            SubmissionOpensAt = starts.AddHours(-2),
-            SubmissionClosesAt = nextDay.AddHours(12),
-            CompletionDeadlineAt = nextDay.AddHours(13),
+            SubmissionOpensAt = opens,
+            SubmissionClosesAt = closes,
+            CompletionDeadlineAt = deadline,
             OpeningMode = mode,
             OpensAt = opening,
             AccessState = EventOpeningService.Flexible,
@@ -170,11 +164,51 @@ public sealed class EventService(IEventRepository repository, IEventCursorCodec 
         };
     }
 
+    internal static string ParseName(string? value)
+    {
+        var name = value?.Trim();
+        if (name is null || name.EnumerateRunes().Count() is < 1 or > 120 || name.Contains('\0'))
+        {
+            throw new EventRequestValidationException("name");
+        }
+
+        return name;
+    }
+
+    internal static DateTime ParseStartsAt(string? value)
+    {
+        if (!DateTime.TryParseExact(value, CivilDateTime, CultureInfo.InvariantCulture, DateTimeStyles.None,
+            out var starts) || starts < DateTime.MinValue.AddHours(2) || starts.Year == DateTime.MaxValue.Year
+            || EventOpeningService.Zone.IsInvalidTime(starts) || EventOpeningService.Zone.IsAmbiguousTime(starts))
+        {
+            throw new EventRequestValidationException("startsAt");
+        }
+
+        return starts;
+    }
+
+    internal static string? ParseWelcome(string? value)
+    {
+        var message = value?.Trim();
+        if (message is not null && (message.EnumerateRunes().Count() is < 1 or > 2000 || message.Contains('\0')))
+        {
+            throw new EventRequestValidationException("welcomeMessage");
+        }
+
+        return message;
+    }
+
+    internal static (DateTime Opens, DateTime Closes, DateTime Deadline) CalculateSubmissionWindow(DateTime starts)
+    {
+        var nextDay = starts.Date.AddDays(1);
+        return (starts.AddHours(-2), nextDay.AddHours(12), nextDay.AddHours(13));
+    }
+
     internal static EventResponse Represent(EventEntity row, DateTimeOffset now)
     {
         return new EventResponse(
             Decimal(row.Id), Decimal(row.Version), row.Name, FormatCivil(row.StartsAt), EventOpeningService.Brasilia, DefaultCover,
-            row.WelcomeMessage ?? Welcome, FormatCivil(row.SubmissionOpensAt), FormatCivil(row.SubmissionClosesAt),
+            row.WelcomeMessage ?? Welcome, row.WelcomeMessage is null, FormatCivil(row.SubmissionOpensAt), FormatCivil(row.SubmissionClosesAt),
             FormatCivil(row.CompletionDeadlineAt), EventOpeningService.Describe(row, now),
             row.LockedAt is null, now);
     }

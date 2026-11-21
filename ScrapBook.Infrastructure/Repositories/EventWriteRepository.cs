@@ -8,13 +8,13 @@ using ScrapBook.Infrastructure.Persistence;
 
 namespace ScrapBook.Infrastructure.Repositories;
 
-public sealed class EventOpeningRepository(ScrapBookDbContext context) : IEventOpeningRepository
+public sealed class EventWriteRepository(ScrapBookDbContext context) : IEventWriteRepository
 {
-    public async Task<IEventOpeningTransaction> BeginAsync(CancellationToken cancellationToken)
+    public async Task<IEventTransaction> BeginAsync(CancellationToken cancellationToken)
     {
         try
         {
-            return new EventOpeningTransaction(await context.Database.BeginTransactionAsync(cancellationToken));
+            return new EventTransaction(await context.Database.BeginTransactionAsync(cancellationToken));
         }
         catch (NpgsqlException error) when (error.IsTransient)
         {
@@ -43,10 +43,33 @@ public sealed class EventOpeningRepository(ScrapBookDbContext context) : IEventO
         }
     }
 
+    public async Task SaveDetailsAsync(EventEntity item, DateTimeOffset updatedAt, CancellationToken cancellationToken)
+    {
+        var starts = Timestamp("starts_at", item.StartsAt);
+        var opens = Timestamp("submission_opens_at", item.SubmissionOpensAt);
+        var closes = Timestamp("submission_closes_at", item.SubmissionClosesAt);
+        var deadline = Timestamp("completion_deadline_at", item.CompletionDeadlineAt);
+        var frozen = Timestamp("frozen_at", item.AccessFrozenAt);
+        await ExecuteAsync($"""
+            UPDATE scrapbook.events
+            SET name = {item.Name},
+                welcome_message = {item.WelcomeMessage},
+                starts_at = {starts},
+                submission_opens_at = {opens},
+                submission_closes_at = {closes},
+                completion_deadline_at = {deadline},
+                access_state = {item.AccessState},
+                access_frozen_at = {frozen},
+                version = {item.Version},
+                updated_at = {updatedAt}
+            WHERE id = {item.Id}
+            """, cancellationToken);
+    }
+
     public async Task SaveOpeningAsync(EventEntity item, DateTimeOffset updatedAt, CancellationToken cancellationToken)
     {
-        var opens = new NpgsqlParameter("opens_at", NpgsqlDbType.Timestamp) { Value = (object?)item.OpensAt ?? DBNull.Value };
-        var frozen = new NpgsqlParameter("frozen_at", NpgsqlDbType.Timestamp) { Value = (object?)item.AccessFrozenAt ?? DBNull.Value };
+        var opens = Timestamp("opens_at", item.OpensAt);
+        var frozen = Timestamp("frozen_at", item.AccessFrozenAt);
         await ExecuteAsync($"""
             UPDATE scrapbook.events
             SET opening_mode = {item.OpeningMode},
@@ -73,6 +96,9 @@ public sealed class EventOpeningRepository(ScrapBookDbContext context) : IEventO
             )
             """, cancellationToken);
     }
+
+    private static NpgsqlParameter Timestamp(string name, DateTime? value) =>
+        new(name, NpgsqlDbType.Timestamp) { Value = (object?)value ?? DBNull.Value };
 
     private async Task ExecuteAsync(FormattableString sql, CancellationToken cancellationToken)
     {

@@ -53,6 +53,7 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
         EventIdentityRequiredException => (401, "IDENTITY_AUTHENTICATION_REQUIRED", "Sua sessão terminou. Entre novamente."),
         EventOriginRejectedException => (403, "REQUEST_ORIGIN_REJECTED", "Origem da solicitação recusada."),
         EventNotFoundException => (404, "RESOURCE_NOT_FOUND", "Evento indisponível para esta conta."),
+        EventStructuralLockedException => (409, "EVENT_LOCKED", "As informações deste evento estão travadas."),
         EventOpeningLockedException => (409, "EVENT_OPENING_LOCKED", "A data de abertura deste evento está travada."),
         EventVersionConflictException => (409, "EVENT_VERSION_CONFLICT", "O evento foi alterado em outra sessão."),
         EventCreationKeyReusedException => (409, "IDEMPOTENCY_KEY_REUSED", "A chave já foi usada em outra tentativa."),

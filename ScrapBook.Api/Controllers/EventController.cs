@@ -14,7 +14,8 @@ namespace ScrapBook.Api.Controllers;
 [ApiController]
 [Route("api/v1/events")]
 public sealed class EventController(
-    EventService events, EventOpeningService opening, PublicUiOriginOptions ui, IWebHostEnvironment environment) : ControllerBase
+    EventService events, EventOpeningService opening, EventDetailsService details,
+    PublicUiOriginOptions ui, IWebHostEnvironment environment) : ControllerBase
 {
     [HttpGet(Name = "listEvents")]
     public async Task<EventListResponse> ListAsync(CancellationToken cancellationToken)
@@ -51,6 +52,16 @@ public sealed class EventController(
         var request = await HttpJsonBodyReader.ReadAsync<ReplaceEventOpeningRequest>(Request, cancellationToken);
         return await opening.ReplaceAsync(account, eventId, request,
             CorrelationMiddleware.GetCorrelation(HttpContext), cancellationToken);
+    }
+
+    [HttpPut("{eventId}/details", Name = "replaceEventDetails")]
+    [RequestSizeLimit(16 * 1024)]
+    public async Task<EventResponse> ReplaceDetailsAsync(string eventId, CancellationToken cancellationToken)
+    {
+        var account = RequireAccount();
+        VerifyOrigin();
+        var request = await HttpJsonBodyReader.ReadAsync<ReplaceEventDetailsRequest>(Request, cancellationToken);
+        return await details.ReplaceAsync(account, eventId, request, cancellationToken);
     }
 
     private long RequireAccount()

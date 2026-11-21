@@ -3,21 +3,24 @@ using ScrapBook.Domain.Interfaces;
 
 namespace ScrapBook.UnitTests.Services;
 
-internal sealed class EventOpeningTestRepository : IEventOpeningRepository
+internal sealed class EventWriteTestRepository : IEventWriteRepository
 {
     public EventEntity? Item { get; set; }
     public AuditEntryEntity? Audit { get; private set; }
-    public EventOpeningTestTransaction Transaction { get; private set; } = new();
+    public EventWriteTestTransaction Transaction { get; private set; } = new();
     public bool FailAudit { get; set; }
 
-    public Task<IEventOpeningTransaction> BeginAsync(CancellationToken cancellationToken)
+    public Task<IEventTransaction> BeginAsync(CancellationToken cancellationToken)
     {
-        Transaction = new EventOpeningTestTransaction();
-        return Task.FromResult<IEventOpeningTransaction>(Transaction);
+        Transaction = new EventWriteTestTransaction();
+        return Task.FromResult<IEventTransaction>(Transaction);
     }
 
     public Task<EventEntity?> FindLinkedForUpdateAsync(long accountId, long eventId, CancellationToken cancellationToken) =>
         Task.FromResult(accountId == 9 && Item?.Id == eventId ? Item : null);
+
+    public Task SaveDetailsAsync(EventEntity item, DateTimeOffset updatedAt, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
 
     public Task SaveOpeningAsync(EventEntity item, DateTimeOffset updatedAt, CancellationToken cancellationToken) =>
         Task.CompletedTask;
