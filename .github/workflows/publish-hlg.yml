@@ -1,0 +1,91 @@
+name: Publicar API em homologação
+on:
+  push:
+    branches: [hlg]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-hlg
+  cancel-in-progress: false
+
+jobs:
+  reserve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.reserve.outputs.version }}
+      run_key: ${{ steps.reserve.outputs.run_key }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - name: Reservar a versão
+        id: reserve
+        env:
+          RELEASE_SERIES: ${{ vars.RELEASE_SERIES }}
+          GIT_COMMITTER_NAME: scrapbook-release[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: python3 .github/scripts/reserve_release.py "$RELEASE_SERIES" "$GITHUB_SHA" "$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT"
+
+  publish:
+    needs: reserve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: hlg
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_VERSION: ${{ needs.reserve.outputs.version }}
+      RESERVED_RUN_KEY: ${{ needs.reserve.outputs.run_key }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_PAGER: ''
+      GH_TOKEN: ${{ github.token }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+      ALB_TARGET_GROUP_ARN: ${{ vars.ALB_TARGET_GROUP_ARN }}
+      DATABASE_GENERATION: ${{ vars.DATABASE_GENERATION }}
+      UI_ORIGIN: ${{ vars.UI_ORIGIN }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          persist-credentials: false
+      - name: Iniciar o registro da publicação
+        id: start
+        run: |
+          source .github/scripts/release_support.sh
+          start_evidence
+      - name: Assumir identidade de homologação por OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          audience: sts.amazonaws.com
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          unset-current-credentials: true
+          role-session-name: gha-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Publicar e conferir ativação
+        id: activation
+        run: bash .github/scripts/publish_ecs.sh
+      - name: Registrar resultado
+        if: ${{ always() && steps.start.outcome == 'success' }}
+        env:
+          RELEASE_RESULT: ${{ steps.activation.outcome }}
+        run: |
+          source .github/scripts/release_support.sh
+          case "$RELEASE_RESULT" in
+            success|failure|skipped|cancelled) record result "$RELEASE_RESULT" ;;
+            *) record result "incomplete" ;;
+          esac
+          record finishedAt "$(date -u +%FT%TZ)"
+      - name: Guardar evidência
+        if: ${{ always() && steps.start.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-${{ needs.reserve.outputs.version }}-${{ github.run_attempt }}
+          path: release-evidence.json
+          if-no-files-found: error
