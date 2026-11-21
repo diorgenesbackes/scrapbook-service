@@ -6,12 +6,12 @@ public sealed class EventEntity
     public long CreatorAccountId { get; init; }
     public long Version { get; set; }
     public required string Code { get; set; }
-    public required string Name { get; init; }
-    public string? WelcomeMessage { get; init; }
-    public DateTime StartsAt { get; init; }
-    public DateTime SubmissionOpensAt { get; init; }
-    public DateTime SubmissionClosesAt { get; init; }
-    public DateTime CompletionDeadlineAt { get; init; }
+    public required string Name { get; set; }
+    public string? WelcomeMessage { get; set; }
+    public DateTime StartsAt { get; set; }
+    public DateTime SubmissionOpensAt { get; set; }
+    public DateTime SubmissionClosesAt { get; set; }
+    public DateTime CompletionDeadlineAt { get; set; }
     public required string OpeningMode { get; set; }
     public DateTime? OpensAt { get; set; }
     public required string AccessState { get; set; }

@@ -8,7 +8,7 @@ using ScrapBook.Domain.Responses;
 
 namespace ScrapBook.Application.Services;
 
-public sealed class EventOpeningService(IEventOpeningRepository repository, TimeProvider clock)
+public sealed class EventOpeningService(IEventWriteRepository repository, TimeProvider clock)
 {
     internal const string Brasilia = "America/Sao_Paulo";
     internal const string DateFormat = "yyyy-MM-dd";
@@ -100,12 +100,26 @@ public sealed class EventOpeningService(IEventOpeningRepository repository, Time
             closed ? "closed" : "open", state != ScheduledLocked);
     }
 
-    private static long ParseVersion(string? value) =>
+    internal static long ParseVersion(string? value) =>
         long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var version) && version >= 0
             ? version : throw new EventRequestValidationException("expectedVersion");
 
+    internal static void PreserveFreeze(EventEntity item, DateTime local, DateTime newCloses)
+    {
+        var cutoff = local >= item.SubmissionClosesAt ? item.SubmissionClosesAt : newCloses;
+        var state = EffectiveState(item, local, cutoff);
+        if (state != item.AccessState)
+        {
+            item.AccessState = state;
+            item.AccessFrozenAt = cutoff;
+        }
+    }
+
     private static string EffectiveState(EventEntity item, DateTime local) =>
-        item.AccessState != Flexible || local < item.SubmissionClosesAt ? item.AccessState
+        EffectiveState(item, local, item.SubmissionClosesAt);
+
+    private static string EffectiveState(EventEntity item, DateTime local, DateTime cutoff) =>
+        item.AccessState != Flexible || local < cutoff ? item.AccessState
             : item.OpeningMode == Scheduled ? ScheduledLocked : ImmediateOnce;
 
     private static void Apply(EventEntity item, string mode, DateTime? date, string state, DateTime local)
