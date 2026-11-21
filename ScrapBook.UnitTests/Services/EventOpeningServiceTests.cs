@@ -7,7 +7,7 @@ namespace ScrapBook.UnitTests.Services;
 
 public sealed class EventOpeningServiceTests
 {
-    private readonly EventOpeningTestRepository repository = new();
+    private readonly EventWriteTestRepository repository = new();
     private readonly EventTestTimeProvider clock = new();
     private readonly Guid correlation = Guid.Parse("fb87bb93-f523-4983-ae41-9af133164dba");
     private EventOpeningService Service => new(repository, clock);

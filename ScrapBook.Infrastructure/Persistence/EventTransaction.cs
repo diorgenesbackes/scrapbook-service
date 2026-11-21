@@ -5,7 +5,7 @@ using ScrapBook.Domain.Interfaces;
 
 namespace ScrapBook.Infrastructure.Persistence;
 
-public sealed class EventOpeningTransaction(IDbContextTransaction transaction) : IEventOpeningTransaction
+public sealed class EventTransaction(IDbContextTransaction transaction) : IEventTransaction
 {
     public async Task CommitAsync(CancellationToken cancellationToken)
     {
