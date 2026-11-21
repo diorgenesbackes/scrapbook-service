@@ -8,13 +8,23 @@ verify_reservation() {
     fi
 }
 
+release_target() {
+    case "${GITHUB_REF_NAME:-}" in
+        hlg) printf '%s\n' hlg ;;
+        main) printf '%s\n' production ;;
+        *) echo "A branch não tem destino de publicação." >&2; return 1 ;;
+    esac
+}
+
 start_evidence() {
+    local target
+    target=$(release_target) || return 1
     verify_reservation || return 1
     : "${RELEASE_VERSION:?}" "${GITHUB_SHA:?}" "${GITHUB_REPOSITORY:?}"
     jq -n --arg sha "$GITHUB_SHA" --arg version "$RELEASE_VERSION" --arg repository "$GITHUB_REPOSITORY" \
         --arg runId "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
-        --arg time "$(date -u +%FT%TZ)" \
-        '{sha: $sha, version: $version, repository: $repository, branch: "hlg", environment: "hlg",
+        --arg time "$(date -u +%FT%TZ)" --arg branch "$GITHUB_REF_NAME" --arg environment "$target" \
+        '{sha: $sha, version: $version, repository: $repository, branch: $branch, environment: $environment,
           runId: $runId, attempt: $attempt, timestamp: $time, result: "incomplete"}' > release-evidence.json
 }
 
@@ -28,9 +38,10 @@ record() {
 ensure_current_revision() {
     : "${GH_TOKEN:?}"
     local remote_sha
-    remote_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/hlg" --jq .object.sha)
-    [[ "${GITHUB_REF_NAME:-}" == hlg && "$remote_sha" == "$GITHUB_SHA" ]] || {
-        echo "A revisão da execução já não é a ponta de hlg." >&2
+    release_target >/dev/null || return 1
+    remote_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$GITHUB_REF_NAME" --jq .object.sha) || return 1
+    [[ "$remote_sha" == "$GITHUB_SHA" ]] || {
+        echo "A revisão da execução já não é a ponta da branch de publicação." >&2
         return 1
     }
 }

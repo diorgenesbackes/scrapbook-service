@@ -6,6 +6,7 @@ source .github/scripts/activate_ecs.sh
 
 : "${ECS_CLUSTER:?}" "${ECS_SERVICE:?}" "${ALB_TARGET_GROUP_ARN:?}" "${DATABASE_GENERATION:?}" "${UI_ORIGIN:?}"
 : "${AWS_ACCOUNT_ID:?}" "${ECR_REPOSITORY:?}" "${EXPECTED_TASK:?}" "${RECOVERY_EVIDENCE:?}"
+target=$(release_target)
 [[ "$AWS_ACCOUNT_ID" =~ ^[0-9]{12}$ && "$ECR_REPOSITORY" =~ ^[a-z0-9][a-z0-9_./-]+$ ]] || exit 2
 [[ "$EXPECTED_TASK" =~ ^arn:aws:ecs:us-east-1:[0-9]{12}:task-definition/[a-zA-Z0-9_-]+:[0-9]+$ ]] || exit 2
 [[ "$EXPECTED_TASK" == arn:aws:ecs:us-east-1:"$AWS_ACCOUNT_ID":task-definition/* ]] || exit 2

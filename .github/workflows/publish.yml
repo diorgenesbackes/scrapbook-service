@@ -1,13 +1,13 @@
-name: Publicar API em homologação
+name: Publicar API
 on:
   push:
-    branches: [hlg]
+    branches: [hlg, main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-hlg
+  group: publish-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -33,7 +33,7 @@ jobs:
     needs: reserve
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    environment: hlg
+    environment: ${{ github.ref_name == 'main' && 'production' || 'hlg' }}
     permissions:
       contents: read
       id-token: write
@@ -49,6 +49,7 @@ jobs:
       ECS_SERVICE: ${{ vars.ECS_SERVICE }}
       ALB_TARGET_GROUP_ARN: ${{ vars.ALB_TARGET_GROUP_ARN }}
       DATABASE_GENERATION: ${{ vars.DATABASE_GENERATION }}
+      DATABASE_SECRET_ARN: ${{ vars.DATABASE_SECRET_ARN }}
       UI_ORIGIN: ${{ vars.UI_ORIGIN }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
