@@ -11,6 +11,9 @@ public sealed class EfPostgresReadinessProbe(ScrapBookDbContext context) : IPost
     private const string SchemaProbe = """
         SELECT current_user = 'scrapbook_app'
             AND count(*) = 24
+            AND (SELECT count(*) FROM pg_catalog.pg_attribute
+                WHERE attrelid = to_regclass('scrapbook.events') AND NOT attisdropped
+                    AND attname IN ('creation_key_hash', 'creation_payload_hash')) = 2
             AND COALESCE(bool_and(has_schema_privilege(n.oid, 'USAGE')), FALSE)
             AND COALESCE(bool_and(
                 CASE
