@@ -1,6 +1,6 @@
 namespace ScrapBook.Domain.Interfaces;
 
-public interface IEventOpeningTransaction : IAsyncDisposable
+public interface IEventTransaction : IAsyncDisposable
 {
     Task CommitAsync(CancellationToken cancellationToken);
 }

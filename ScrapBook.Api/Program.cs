@@ -71,8 +71,9 @@ builder.Services.AddScoped<IPostgresReadinessProbe, EfPostgresReadinessProbe>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IEventCursorCodec, EventCursorCodec>();
 builder.Services.AddScoped<IEventRepository, EventRepository>();
-builder.Services.AddScoped<IEventOpeningRepository, EventOpeningRepository>();
+builder.Services.AddScoped<IEventWriteRepository, EventWriteRepository>();
 builder.Services.AddScoped<EventOpeningService>();
+builder.Services.AddScoped<EventDetailsService>();
 builder.Services.AddScoped<EventService>();
 builder.Services.AddAuthentication(DevelopmentIdentityAuthenticationHandler.SchemeName)
     .AddScheme<AuthenticationSchemeOptions, DevelopmentIdentityAuthenticationHandler>(

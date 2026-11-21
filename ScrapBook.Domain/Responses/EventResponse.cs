@@ -8,6 +8,7 @@ public sealed record EventResponse(
     string TimeZone,
     EventCoverResponse Cover,
     string WelcomeMessage,
+    bool UsesDefaultWelcomeMessage,
     string SubmissionOpensAt,
     string SubmissionClosesAt,
     string CompletionDeadlineAt,
