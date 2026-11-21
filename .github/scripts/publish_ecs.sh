@@ -5,6 +5,7 @@ source .github/scripts/release_ecs.sh
 source .github/scripts/activate_ecs.sh
 
 : "${ECS_CLUSTER:?}" "${ECS_SERVICE:?}" "${ALB_TARGET_GROUP_ARN:?}" "${DATABASE_GENERATION:?}" "${UI_ORIGIN:?}"
+target=$(release_target)
 ensure_current_revision
 check_database_generation
 service=$(read_api_service)
