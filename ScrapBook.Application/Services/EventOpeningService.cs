@@ -101,11 +101,11 @@ public sealed class EventOpeningService(IEventWriteRepository repository, TimePr
 
     internal static EventOpeningStatusResponse DescribeContent(EventEntity item, DateTimeOffset now)
     {
-        var opensAt = item.OpeningMode == Scheduled && item.OpensAt is { } date ? OpeningInstant(date) : (DateTimeOffset?)null;
+        var opensAt = item.OpeningMode == Scheduled && item.OpensAt is { } date ? ToBrasiliaInstant(date) : (DateTimeOffset?)null;
         return new EventOpeningStatusResponse(opensAt > now ? "closed" : "open", FormatDate(item.OpensAt), opensAt, now);
     }
 
-    private static DateTimeOffset OpeningInstant(DateTime date)
+    internal static DateTimeOffset ToBrasiliaInstant(DateTime date)
     {
         var offset = Zone.IsInvalidTime(date) ? Zone.GetUtcOffset(date.AddDays(-1))
             : Zone.IsAmbiguousTime(date) ? Zone.GetAmbiguousTimeOffsets(date).Max()

@@ -3,6 +3,7 @@ using Npgsql;
 using ScrapBook.Domain.Entities;
 using ScrapBook.Domain.Exceptions;
 using ScrapBook.Domain.Interfaces;
+using ScrapBook.Domain.Models;
 using ScrapBook.Infrastructure.Persistence;
 
 namespace ScrapBook.Infrastructure.Repositories;
@@ -48,6 +49,23 @@ public sealed class EventRepository(ScrapBookDbContext context) : IEventReposito
                 item => item.CreatorAccountId == accountId && item.CreationKeyHash == keyHash, cancellationToken);
         }
         catch (NpgsqlException error) when (error.IsTransient)
+        {
+            throw new PostgresUnavailableException(error);
+        }
+    }
+
+    public async Task<PublicEventModel?> FindByCodeAsync(string code, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await context.Set<EventEntity>().AsNoTracking()
+                .Where(item => item.Code == code)
+                .Select(item => new PublicEventModel(item.Name, item.WelcomeMessage, item.StartsAt,
+                    item.SubmissionOpensAt, item.SubmissionClosesAt, item.CompletionDeadlineAt))
+                .SingleOrDefaultAsync(cancellationToken);
+        }
+        catch (NpgsqlException error) when (error.IsTransient
+            || error is PostgresException { SqlState: PostgresErrorCodes.TooManyConnections })
         {
             throw new PostgresUnavailableException(error);
         }
