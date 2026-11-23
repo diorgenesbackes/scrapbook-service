@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using Npgsql;
 using ScrapBook.Api.Options;
 
 namespace ScrapBook.UnitTests.Options;
@@ -89,6 +90,22 @@ public sealed class StartupOptionsTests
         var error = Assert.Throws<StartupConfigurationException>(() => DatabaseOptions.FromConfiguration(config));
         Assert.Equal(expected, error.OptionName);
         Assert.DoesNotContain("local-fixture-secret", error.ToString());
+    }
+
+    [Theory]
+    [InlineData("", 32)]
+    [InlineData(";Maximum Pool Size=48", 48)]
+    [InlineData(";Minimum Pool Size=36", 36)]
+    [InlineData(";Pooling=false", 100)]
+    public void UsesBoundedPoolByDefaultAndRespectsExplicitConfiguration(string parameters, int maxPoolSize)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:ScrapBook"] = "Host=localhost;Database=scrapbook;Username=scrapbook_app;Password=fixture" + parameters,
+        }).Build();
+
+        var settings = new NpgsqlConnectionStringBuilder(DatabaseOptions.FromConfiguration(config).ConnectionString);
+        Assert.Equal(maxPoolSize, settings.MaxPoolSize);
     }
 
     [Theory]

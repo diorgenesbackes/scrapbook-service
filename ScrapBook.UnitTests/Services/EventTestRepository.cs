@@ -1,5 +1,6 @@
 using ScrapBook.Domain.Entities;
 using ScrapBook.Domain.Interfaces;
+using ScrapBook.Domain.Models;
 
 namespace ScrapBook.UnitTests.Services;
 
@@ -9,6 +10,17 @@ internal sealed class EventTestRepository : IEventRepository
     public EventMemberEntity? Member { get; set; }
     public int Inserts { get; private set; }
     public bool ShowAnotherRow { get; set; }
+    public PublicEventModel? PublicEvent { get; set; }
+    public string? SearchedCode { get; private set; }
+    public CancellationToken PublicLookupToken { get; private set; }
+
+    public Task<PublicEventModel?> FindByCodeAsync(string code, CancellationToken cancellationToken)
+    {
+        SearchedCode = code;
+        PublicLookupToken = cancellationToken;
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(PublicEvent);
+    }
 
     public Task<EventEntity?> FindCreationAsync(long accountId, byte[] keyHash, CancellationToken cancellationToken) =>
         Task.FromResult(Event is { } item && item.CreatorAccountId == accountId
