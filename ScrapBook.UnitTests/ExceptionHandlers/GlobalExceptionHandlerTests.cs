@@ -36,6 +36,25 @@ public sealed class GlobalExceptionHandlerTests
     }
 
     [Fact]
+    public async Task WritesPublicNotFoundWithNoCacheAsync()
+    {
+        var handler = new GlobalExceptionHandler(NullLogger<GlobalExceptionHandler>.Instance);
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/api/v1/public-events/fixture-secret";
+        using var body = new MemoryStream();
+        context.Response.Body = body;
+
+        Assert.True(await handler.TryHandleAsync(context, new PublicEventNotFoundException(), CancellationToken.None));
+
+        Assert.Equal(404, context.Response.StatusCode);
+        Assert.Equal("no-store", context.Response.Headers.CacheControl.ToString());
+        using var json = JsonDocument.Parse(body.ToArray());
+        Assert.Equal("Evento indisponível.", json.RootElement.GetProperty("title").GetString());
+        Assert.Equal("RESOURCE_NOT_FOUND", json.RootElement.GetProperty("code").GetString());
+        Assert.DoesNotContain("fixture-secret", json.RootElement.GetRawText());
+    }
+
+    [Fact]
     public async Task PreservesClientCancellationAsync()
     {
         var handler = new GlobalExceptionHandler(NullLogger<GlobalExceptionHandler>.Instance);

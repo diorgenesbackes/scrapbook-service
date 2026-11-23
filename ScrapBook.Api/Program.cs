@@ -51,7 +51,7 @@ if (ui.Origin is { } origin)
         policy => policy.WithOrigins(origin)
             .WithMethods(HttpMethods.Get, HttpMethods.Head, HttpMethods.Post, HttpMethods.Put)
             .WithHeaders(CorrelationMiddleware.HeaderName, "Content-Type", "Idempotency-Key")
-            .WithExposedHeaders(CorrelationMiddleware.HeaderName)));
+            .WithExposedHeaders(CorrelationMiddleware.HeaderName, "Retry-After")));
 }
 
 var protection = builder.Services.AddDataProtection();
@@ -74,6 +74,7 @@ builder.Services.AddScoped<IEventRepository, EventRepository>();
 builder.Services.AddScoped<IEventWriteRepository, EventWriteRepository>();
 builder.Services.AddScoped<EventOpeningService>();
 builder.Services.AddScoped<EventDetailsService>();
+builder.Services.AddScoped<PublicEventService>();
 builder.Services.AddScoped<EventService>();
 builder.Services.AddAuthentication(DevelopmentIdentityAuthenticationHandler.SchemeName)
     .AddScheme<AuthenticationSchemeOptions, DevelopmentIdentityAuthenticationHandler>(

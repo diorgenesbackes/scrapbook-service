@@ -61,6 +61,11 @@ public sealed class DatabaseOptions
             throw new StartupConfigurationException("ConnectionStrings:ScrapBook");
         }
 
+        if (settings.Pooling && !settings.ShouldSerialize("Maximum Pool Size"))
+        {
+            settings.MaxPoolSize = Math.Max(settings.MinPoolSize, 32);
+        }
+
         return settings;
     }
 }
