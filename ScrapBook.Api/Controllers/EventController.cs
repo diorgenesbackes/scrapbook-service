@@ -38,6 +38,23 @@ public sealed class EventController(
         return await events.GetOpeningStatusAsync(account, eventId, cancellationToken);
     }
 
+    [HttpGet("{eventId}/public-link", Name = "getEventPublicLink")]
+    public async Task<EventPublicLinkResponse> GetPublicLinkAsync(string eventId, CancellationToken cancellationToken)
+    {
+        var account = RequireAccount();
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(TimeSpan.FromSeconds(2));
+
+        try
+        {
+            return await events.GetPublicLinkAsync(account, eventId, budget.Token);
+        }
+        catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested && budget.IsCancellationRequested)
+        {
+            throw new PublicEventTimeoutException(error);
+        }
+    }
+
     [HttpPost(Name = "createEvent")]
     [RequestSizeLimit(16 * 1024)]
     public async Task<IActionResult> CreateAsync(CancellationToken cancellationToken)

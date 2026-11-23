@@ -42,6 +42,13 @@ public sealed class EventService(IEventRepository repository, IEventCursorCodec 
         return EventOpeningService.DescribeContent(row, clock.GetUtcNow());
     }
 
+    public async Task<EventPublicLinkResponse> GetPublicLinkAsync(
+        long accountId, string eventId, CancellationToken cancellationToken)
+    {
+        var row = await GetLinkedAsync(accountId, ParseEventId(eventId), cancellationToken);
+        return new EventPublicLinkResponse(row.Code);
+    }
+
     internal static long ParseEventId(string eventId)
     {
         if (!long.TryParse(eventId, NumberStyles.None, CultureInfo.InvariantCulture, out var id)
