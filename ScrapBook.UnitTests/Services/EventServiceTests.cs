@@ -30,6 +30,25 @@ public sealed class EventServiceTests
     }
 
     [Fact]
+    public async Task ReturnsStablePublicCodeOnlyForCurrentMembersAsync()
+    {
+        var created = await Service.CreateAsync(9, Key.ToString(), Request, CancellationToken.None);
+        var id = created.Event.Id;
+        var expected = repository.Event!.Code;
+
+        var creator = await Service.GetPublicLinkAsync(9, id, CancellationToken.None);
+        Assert.Equal(expected, creator.Code);
+        Assert.Equal(43, creator.Code.Length);
+        await Assert.ThrowsAsync<EventNotFoundException>(() => Service.GetPublicLinkAsync(8, id, CancellationToken.None));
+        await Assert.ThrowsAsync<EventNotFoundException>(() => Service.GetPublicLinkAsync(9, "99", CancellationToken.None));
+        await Assert.ThrowsAsync<EventRequestValidationException>(
+            () => Service.GetPublicLinkAsync(9, "011", CancellationToken.None));
+
+        repository.Member = new EventMemberEntity { AccountId = 10, Event = repository.Event, Slot = 2 };
+        Assert.Equal(expected, (await Service.GetPublicLinkAsync(10, id, CancellationToken.None)).Code);
+    }
+
+    [Fact]
     public async Task ReplaysTheCanonicalAttemptAfterTimeHasAdvanced()
     {
         var token = CancellationToken.None;
