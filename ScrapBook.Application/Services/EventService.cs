@@ -14,8 +14,8 @@ public sealed class EventService(IEventRepository repository, IEventCursorCodec 
 {
     private const string CivilDateTime = "yyyy-MM-dd'T'HH:mm:ss";
     private const string OpeningField = "openingPolicy.opensOn";
-    private const string Welcome = "Seja bem-vindo! Compartilhe uma lembrança deste evento.";
-    private static readonly EventCoverResponse DefaultCover = new("default");
+    internal const string Welcome = "Seja bem-vindo! Compartilhe uma lembrança deste evento.";
+    internal static readonly EventCoverResponse DefaultCover = new("default");
 
     public async Task<EventListResponse> ListAsync(
         long accountId, string? cursor, string? pageSize, CancellationToken cancellationToken)
@@ -220,6 +220,6 @@ public sealed class EventService(IEventRepository repository, IEventCursorCodec 
             row.LockedAt is null, now);
     }
 
-    private static string FormatCivil(DateTime value) => value.ToString(CivilDateTime, CultureInfo.InvariantCulture);
+    internal static string FormatCivil(DateTime value) => value.ToString(CivilDateTime, CultureInfo.InvariantCulture);
     private static string Decimal(long value) => value.ToString(CultureInfo.InvariantCulture);
 }
