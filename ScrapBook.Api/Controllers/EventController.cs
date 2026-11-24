@@ -1,6 +1,5 @@
-using System.Globalization;
-using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
+using ScrapBook.Api.Guards;
 using ScrapBook.Api.Middlewares;
 using ScrapBook.Api.Options;
 using ScrapBook.Api.Readers;
@@ -109,18 +108,7 @@ public sealed class EventController(
         return await details.ReplaceAsync(account, eventId, request, cancellationToken);
     }
 
-    private long RequireAccount()
-    {
-        Response.Headers.CacheControl = "no-store";
-        if (User.Identity?.IsAuthenticated != true
-            || !long.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), NumberStyles.None,
-                CultureInfo.InvariantCulture, out var accountId) || accountId < 1)
-        {
-            throw new EventIdentityRequiredException();
-        }
-
-        return accountId;
-    }
+    private long RequireAccount() => EventRequestGuard.RequireAccount(HttpContext);
 
     private string? ReadQuery(string name)
     {
@@ -133,18 +121,5 @@ public sealed class EventController(
         };
     }
 
-    private void VerifyOrigin()
-    {
-        var expected = ui.Origin;
-        if (environment.IsDevelopment() && Request.Host.Host is "127.0.0.1" or "localhost" or "[::1]")
-        {
-            expected ??= $"{Request.Scheme}://{Request.Host}";
-        }
-
-        var origins = Request.Headers.Origin;
-        if (expected is null || origins.Count != 1 || !string.Equals(origins[0], expected, StringComparison.Ordinal))
-        {
-            throw new EventOriginRejectedException();
-        }
-    }
+    private void VerifyOrigin() => EventRequestGuard.VerifyOrigin(Request, ui, environment);
 }

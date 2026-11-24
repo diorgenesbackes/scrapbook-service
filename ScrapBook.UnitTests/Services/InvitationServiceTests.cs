@@ -10,7 +10,7 @@ public sealed class InvitationServiceTests
     private readonly EventWriteTestRepository events = new() { Item = OpenEvent() };
     private readonly InvitationTestRepository invitations = new();
     private readonly EventTestTimeProvider clock = new();
-    private readonly InvitationTokenCodec codec = new("test", new byte[32], "cipher",
+    private readonly InvitationTokenCodec codec = new("test", new Dictionary<string, byte[]> { ["test"] = new byte[32] }, "cipher",
         new Dictionary<string, byte[]> { ["cipher"] = [.. Enumerable.Repeat((byte)1, 32)] });
     private InvitationService Service => new(events, invitations, codec, clock);
 

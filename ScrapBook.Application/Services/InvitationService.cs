@@ -48,8 +48,11 @@ public sealed class InvitationService(
 
         var item = await events.FindLinkedForUpdateAsync(accountId, eventId, cancellationToken)
             ?? throw new EventNotFoundException();
-        var member = await invitations.FindMembersAsync(eventId, accountId, cancellationToken)
-            ?? throw new EventNotFoundException();
+        var member = await invitations.FindMembersAsync(eventId, accountId, cancellationToken);
+        if (member.MemberId is null)
+        {
+            throw new EventNotFoundException();
+        }
         if (!tokens.IsAvailable)
         {
             throw new InvitationProtectionUnavailableException();
@@ -107,7 +110,7 @@ public sealed class InvitationService(
         var invitation = new InvitationEntity
         {
             EventId = item.Id,
-            IssuerMemberId = member.MemberId,
+            IssuerMemberId = member.MemberId!.Value,
             RequestKey = requestKey,
             HashKeyId = secret.HashKeyId,
             TokenHash = secret.Hash,
