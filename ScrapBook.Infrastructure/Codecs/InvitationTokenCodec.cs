@@ -8,18 +8,19 @@ using ScrapBook.Domain.Interfaces;
 namespace ScrapBook.Infrastructure.Codecs;
 
 public sealed class InvitationTokenCodec(
-    string? hashKeyId, byte[]? hashKey, string? encryptionKeyId, IReadOnlyDictionary<string, byte[]> encryptionKeys)
+    string? hashKeyId, IReadOnlyDictionary<string, byte[]> hashKeys,
+    string? encryptionKeyId, IReadOnlyDictionary<string, byte[]> encryptionKeys)
     : IInvitationTokenCodec
 {
     private const int SecretSize = 32;
     private const int NonceSize = 12;
     private const int TagSize = 16;
 
-    public bool IsAvailable => hashKey is not null;
+    public bool IsAvailable => hashKeyId is not null;
 
     public InvitationSecret Create(long eventId, Guid requestKey)
     {
-        if (hashKeyId is null || hashKey is null || encryptionKeyId is null)
+        if (hashKeyId is null || encryptionKeyId is null)
         {
             throw new InvitationProtectionUnavailableException();
         }
@@ -28,7 +29,7 @@ public sealed class InvitationTokenCodec(
         try
         {
             var token = Token(hashKeyId, secret);
-            var hash = HMACSHA256.HashData(hashKey, Encoding.ASCII.GetBytes(token));
+            var hash = Hash(hashKeys[hashKeyId], token);
             var envelope = new byte[NonceSize + SecretSize + TagSize];
             var nonce = envelope.AsSpan(0, NonceSize);
             RandomNumberGenerator.Fill(nonce);
@@ -73,6 +74,29 @@ public sealed class InvitationTokenCodec(
             CryptographicOperations.ZeroMemory(secret);
         }
     }
+
+    public InvitationDigest? Digest(string token)
+    {
+        if (token.Length is < 48 or > 111 || !token.StartsWith("v1.", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var separator = token.IndexOf('.', 3);
+        if (separator < 4 || token.Length - separator != 44)
+        {
+            return null;
+        }
+
+        var keyId = token[3..separator];
+        var secret = token[(separator + 1)..];
+        return hashKeys.TryGetValue(keyId, out var key)
+            && secret.All(value => char.IsAsciiLetterOrDigit(value) || value is '-' or '_')
+            ? new InvitationDigest(keyId, Hash(key, token))
+            : null;
+    }
+
+    private static byte[] Hash(byte[] key, string token) => HMACSHA256.HashData(key, Encoding.ASCII.GetBytes(token));
 
     private static byte[] AssociatedData(long eventId, Guid requestKey, string keyId) =>
         Encoding.ASCII.GetBytes(FormattableString.Invariant($"scrapbook:invitation:v1:{eventId}:{requestKey:D}:{keyId}"));
