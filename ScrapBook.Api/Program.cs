@@ -77,9 +77,10 @@ builder.Services.AddScoped<IEventRepository, EventRepository>();
 builder.Services.AddScoped<IEventWriteRepository, EventWriteRepository>();
 builder.Services.AddScoped<IInvitationRepository, InvitationRepository>();
 builder.Services.AddSingleton<IInvitationTokenCodec>(new InvitationTokenCodec(
-    invitationProtection.HashKeyId, invitationProtection.HashKey, invitationProtection.EncryptionKeyId,
+    invitationProtection.HashKeyId, invitationProtection.HashKeys, invitationProtection.EncryptionKeyId,
     invitationProtection.EncryptionKeys));
 builder.Services.AddScoped<InvitationService>();
+builder.Services.AddScoped<InvitationAcceptanceService>();
 builder.Services.AddScoped<EventOpeningService>();
 builder.Services.AddScoped<EventDetailsService>();
 builder.Services.AddScoped<PublicEventService>();

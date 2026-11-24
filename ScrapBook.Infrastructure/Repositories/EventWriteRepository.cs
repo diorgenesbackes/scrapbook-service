@@ -22,19 +22,31 @@ public sealed class EventWriteRepository(ScrapBookDbContext context) : IEventWri
         }
     }
 
-    public async Task<EventEntity?> FindLinkedForUpdateAsync(long accountId, long eventId, CancellationToken cancellationToken)
+    public Task<EventEntity?> FindLinkedForUpdateAsync(long accountId, long eventId, CancellationToken cancellationToken)
+    {
+        return LoadLockedEventAsync($"""
+            SELECT event.*
+            FROM scrapbook.events AS event
+            WHERE event.id = {eventId} AND EXISTS (
+                SELECT 1 FROM scrapbook.event_members AS member
+                WHERE member.event_members_events_id = event.id AND member.event_members_accounts_id = {accountId}
+            )
+            FOR UPDATE OF event
+            """, cancellationToken);
+    }
+
+    public Task<EventEntity?> FindForUpdateAsync(long eventId, CancellationToken cancellationToken)
+    {
+        return LoadLockedEventAsync($"""
+            SELECT event.* FROM scrapbook.events AS event WHERE event.id = {eventId} FOR UPDATE OF event
+            """, cancellationToken);
+    }
+
+    private async Task<EventEntity?> LoadLockedEventAsync(FormattableString sql, CancellationToken cancellationToken)
     {
         try
         {
-            var rows = await context.Set<EventEntity>().FromSqlInterpolated($"""
-                SELECT event.*
-                FROM scrapbook.events AS event
-                WHERE event.id = {eventId} AND EXISTS (
-                    SELECT 1 FROM scrapbook.event_members AS member
-                    WHERE member.event_members_events_id = event.id AND member.event_members_accounts_id = {accountId}
-                )
-                FOR UPDATE OF event
-                """).AsNoTracking().ToListAsync(cancellationToken);
+            var rows = await context.Set<EventEntity>().FromSqlInterpolated(sql).AsNoTracking().ToListAsync(cancellationToken);
             return rows.SingleOrDefault();
         }
         catch (NpgsqlException error) when (error.IsTransient)

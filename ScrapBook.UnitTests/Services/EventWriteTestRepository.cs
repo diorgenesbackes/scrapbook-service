@@ -19,6 +19,8 @@ internal sealed class EventWriteTestRepository : IEventWriteRepository
     public Task<EventEntity?> FindLinkedForUpdateAsync(long accountId, long eventId, CancellationToken cancellationToken) =>
         Task.FromResult(accountId == 9 && Item?.Id == eventId ? Item : null);
 
+    public Task<EventEntity?> FindForUpdateAsync(long eventId, CancellationToken cancellationToken) =>
+        Task.FromResult(Item?.Id == eventId ? Item : null);
     public Task SaveDetailsAsync(EventEntity item, DateTimeOffset updatedAt, CancellationToken cancellationToken) =>
         Task.CompletedTask;
 

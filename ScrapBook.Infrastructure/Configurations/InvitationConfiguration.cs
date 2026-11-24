@@ -13,6 +13,7 @@ public sealed class InvitationConfiguration : IEntityTypeConfiguration<Invitatio
         builder.Property(invitation => invitation.Id).HasColumnName("id").UseIdentityAlwaysColumn();
         builder.Property(invitation => invitation.EventId).HasColumnName("invitations_events_id");
         builder.Property(invitation => invitation.IssuerMemberId).HasColumnName("invitations_issuer_event_members_id");
+        builder.Property(invitation => invitation.RecipientAccountId).HasColumnName("invitations_recipient_accounts_id");
         builder.Property(invitation => invitation.RequestKey).HasColumnName("request_key");
         builder.Property(invitation => invitation.HashKeyId).HasColumnName("hash_key_id").HasMaxLength(64);
         builder.Property(invitation => invitation.TokenHash).HasColumnName("token_hash");
@@ -23,6 +24,7 @@ public sealed class InvitationConfiguration : IEntityTypeConfiguration<Invitatio
         builder.Property(invitation => invitation.CreatedAt).HasColumnName("created_at");
         builder.Property(invitation => invitation.UpdatedAt).HasColumnName("updated_at");
         builder.Property(invitation => invitation.ExpiresAt).HasColumnName("expires_at");
+        builder.Property(invitation => invitation.AcceptedAt).HasColumnName("accepted_at");
         builder.Property(invitation => invitation.InvalidatedAt).HasColumnName("invalidated_at");
     }
 }
