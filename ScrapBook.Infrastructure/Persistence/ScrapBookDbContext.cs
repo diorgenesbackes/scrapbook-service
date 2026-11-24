@@ -9,5 +9,6 @@ public sealed class ScrapBookDbContext(DbContextOptions<ScrapBookDbContext> opti
     {
         modelBuilder.ApplyConfiguration(new EventConfiguration());
         modelBuilder.ApplyConfiguration(new EventMemberConfiguration());
+        modelBuilder.ApplyConfiguration(new InvitationConfiguration());
     }
 }
