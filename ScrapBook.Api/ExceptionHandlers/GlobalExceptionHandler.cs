@@ -57,10 +57,14 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
         EventStructuralLockedException => (409, "EVENT_LOCKED", "As informações deste evento estão travadas."),
         EventOpeningLockedException => (409, "EVENT_OPENING_LOCKED", "A data de abertura deste evento está travada."),
         EventVersionConflictException => (409, "EVENT_VERSION_CONFLICT", "O evento foi alterado em outra sessão."),
-        EventCreationKeyReusedException => (409, "IDEMPOTENCY_KEY_REUSED", "A chave já foi usada em outra tentativa."),
+        EventCreationKeyReusedException or InvitationKeyReusedException => (409, "IDEMPOTENCY_KEY_REUSED", "A chave já foi usada em outra tentativa."),
+        InvitationUnavailableException => (409, "INVITATION_UNAVAILABLE", "Este convite não está mais disponível. Solicite um novo."),
+        InvitationEventLockedException => (409, "INVITATION_EVENT_LOCKED", "Os convites deste evento estão travados."),
+        InvitationEventFullException => (409, "INVITATION_EVENT_FULL", "Este evento já tem dois responsáveis."),
         BadHttpRequestException { StatusCode: 413 } => (413, "REQUEST_TOO_LARGE", "Tamanho da solicitação excedido."),
         EventJsonMediaTypeException => (415, "UNSUPPORTED_MEDIA_TYPE", "Use application/json."),
-        PostgresUnavailableException or PublicEventTimeoutException => (503, "DEPENDENCY_UNAVAILABLE", "Dependência indisponível"),
+        PostgresUnavailableException or PublicEventTimeoutException or InvitationProtectionUnavailableException =>
+            (503, "DEPENDENCY_UNAVAILABLE", "Dependência indisponível"),
         _ => (500, "UNEXPECTED_ERROR", "Falha interna")
     };
 }

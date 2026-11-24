@@ -133,15 +133,17 @@ public sealed class EventService(IEventRepository repository, IEventCursorCodec 
             ? size : throw new EventRequestValidationException("pageSize");
     }
 
-    private static byte[] HashKey(string? key)
+    internal static Guid ParseRequestKey(string? key)
     {
         if (!Guid.TryParseExact(key, "D", out var parsed) || parsed.Version != 4 || (parsed.ToByteArray()[8] & 0xc0) != 0x80)
         {
             throw new EventRequestValidationException("Idempotency-Key");
         }
 
-        return SHA256.HashData(parsed.ToByteArray());
+        return parsed;
     }
+
+    private static byte[] HashKey(string? key) => SHA256.HashData(ParseRequestKey(key).ToByteArray());
 
     private static EventEntity PrepareCreation(long accountId, CreateEventRequest request, byte[] keyHash)
     {
