@@ -18,9 +18,11 @@ public sealed class InvitationServiceTests
     public async Task ReplaysTheSamePendingInvitationWithoutExtendingItsExpiryAsync()
     {
         var key = Guid.NewGuid().ToString();
+        var persistedDeadline = clock.Now.AddHours(24);
+        clock.Now = clock.Now.AddTicks(7);
         var original = await IssueAsync(key);
         Assert.False(original.IsReplay);
-        Assert.Equal(clock.Now.AddHours(24), original.Invitation.ExpiresAt);
+        Assert.Equal(persistedDeadline, original.Invitation.ExpiresAt);
         Assert.Equal(original.Invitation, (await CurrentAsync()).Invitation);
         var audit = events.Audit;
         Assert.NotNull(audit);

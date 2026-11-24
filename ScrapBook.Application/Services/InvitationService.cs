@@ -31,7 +31,8 @@ public sealed class InvitationService(
         var replay = await invitations.FindByRequestAsync(id, requestKey, cancellationToken);
         var now = clock.GetUtcNow();
         var result = replay is null
-            ? await IssueAsync(item, member, accountId, requestKey, correlation, now, cancellationToken)
+            ? await IssueAsync(item, member, accountId, requestKey, correlation,
+                now.AddTicks(-(now.Ticks % TimeSpan.TicksPerMicrosecond)), cancellationToken)
             : Replay(item, member, replay, now);
         await transaction.CommitAsync(cancellationToken);
         return result;
