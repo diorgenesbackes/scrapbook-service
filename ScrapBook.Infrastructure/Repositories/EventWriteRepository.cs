@@ -91,7 +91,7 @@ public sealed class EventWriteRepository(ScrapBookDbContext context) : IEventWri
                 subject_id, outcome, correlation_id, created_at, expires_at, before_state, after_state, area
             ) VALUES (
                 {audit.AccountId}, {audit.EventId}, {audit.ActorType}, {audit.Action}, {audit.SubjectType},
-                {audit.EventId}, {audit.Outcome}, {audit.CorrelationId}, {audit.CreatedAt}, {audit.ExpiresAt},
+                {audit.SubjectId ?? audit.EventId}, {audit.Outcome}, {audit.CorrelationId}, {audit.CreatedAt}, {audit.ExpiresAt},
                 CAST({audit.BeforeState} AS jsonb), CAST({audit.AfterState} AS jsonb), {audit.Area}
             )
             """, cancellationToken);

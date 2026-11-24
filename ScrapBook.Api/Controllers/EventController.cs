@@ -15,7 +15,7 @@ namespace ScrapBook.Api.Controllers;
 [Route("api/v1/events")]
 public sealed class EventController(
     EventService events, EventOpeningService opening, EventDetailsService details,
-    PublicUiOriginOptions ui, IWebHostEnvironment environment) : ControllerBase
+    InvitationService invitations, PublicUiOriginOptions ui, IWebHostEnvironment environment) : ControllerBase
 {
     [HttpGet(Name = "listEvents")]
     public async Task<EventListResponse> ListAsync(CancellationToken cancellationToken)
@@ -65,6 +65,27 @@ public sealed class EventController(
         var request = await HttpJsonBodyReader.ReadAsync<CreateEventRequest>(Request, cancellationToken);
         var result = await events.CreateAsync(account, keys.Count == 1 ? keys[0] : null, request, cancellationToken);
         return result.IsReplay ? Ok(result.Event) : CreatedAtRoute("getEvent", new { eventId = result.Event.Id }, result.Event);
+    }
+
+    [HttpGet("{eventId}/invitations/current", Name = "getCurrentEventInvitation")]
+    public async Task<InvitationStatusResponse> GetCurrentInvitationAsync(string eventId, CancellationToken cancellationToken)
+    {
+        return await invitations.GetCurrentAsync(RequireAccount(), eventId, cancellationToken);
+    }
+
+    [HttpPost("{eventId}/invitations", Name = "createEventInvitation")]
+    [RequestSizeLimit(16 * 1024)]
+    public async Task<IActionResult> CreateInvitationAsync(string eventId, CancellationToken cancellationToken)
+    {
+        var account = RequireAccount();
+        VerifyOrigin();
+        var keys = Request.Headers["Idempotency-Key"];
+        await HttpJsonBodyReader.ReadAsync<CreateInvitationRequest>(Request, cancellationToken);
+        var result = await invitations.CreateAsync(account, eventId, keys.Count == 1 ? keys[0] : null,
+            CorrelationMiddleware.GetCorrelation(HttpContext), cancellationToken);
+        return result.IsReplay
+            ? Ok(result.Invitation)
+            : CreatedAtRoute("getCurrentEventInvitation", new { eventId }, result.Invitation);
     }
 
     [HttpPut("{eventId}/opening-policy", Name = "replaceEventOpeningPolicy")]

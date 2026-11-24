@@ -14,6 +14,7 @@ using ScrapBook.Api.Options;
 using ScrapBook.Api.Writers;
 using ScrapBook.Application.Services;
 using ScrapBook.Domain.Interfaces;
+using ScrapBook.Infrastructure.Codecs;
 using ScrapBook.Infrastructure.Persistence;
 using ScrapBook.Infrastructure.Probes;
 using ScrapBook.Infrastructure.Repositories;
@@ -22,10 +23,12 @@ var builder = WebApplication.CreateBuilder(args);
 DatabaseOptions database;
 DevelopmentIdentityOptions identity;
 PublicUiOriginOptions ui;
+InvitationProtectionOptions invitationProtection;
 try
 {
     database = DatabaseOptions.FromConfiguration(builder.Configuration);
     ui = PublicUiOriginOptions.FromConfiguration(builder.Configuration);
+    invitationProtection = InvitationProtectionOptions.FromConfiguration(builder.Configuration);
     var isContainer = string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"),
         "true", StringComparison.OrdinalIgnoreCase);
     identity = DevelopmentIdentityOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(), isContainer);
@@ -72,6 +75,11 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IEventCursorCodec, EventCursorCodec>();
 builder.Services.AddScoped<IEventRepository, EventRepository>();
 builder.Services.AddScoped<IEventWriteRepository, EventWriteRepository>();
+builder.Services.AddScoped<IInvitationRepository, InvitationRepository>();
+builder.Services.AddSingleton<IInvitationTokenCodec>(new InvitationTokenCodec(
+    invitationProtection.HashKeyId, invitationProtection.HashKey, invitationProtection.EncryptionKeyId,
+    invitationProtection.EncryptionKeys));
+builder.Services.AddScoped<InvitationService>();
 builder.Services.AddScoped<EventOpeningService>();
 builder.Services.AddScoped<EventDetailsService>();
 builder.Services.AddScoped<PublicEventService>();
