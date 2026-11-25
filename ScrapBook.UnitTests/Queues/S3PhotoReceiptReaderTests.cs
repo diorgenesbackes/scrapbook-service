@@ -26,7 +26,7 @@ public sealed class S3PhotoReceiptReaderTests
 
     [Fact]
     public void RejectsPutEventWithoutVersionField() =>
-        Assert.Throws<KeyNotFoundException>(() => S3PhotoReceiptReader.Read(Event(null)));
+        Assert.Throws<JsonException>(() => S3PhotoReceiptReader.Read(Event(null)));
 
     [Fact]
     public void RecognizesS3TestEventWithoutProducingAReceipt() =>

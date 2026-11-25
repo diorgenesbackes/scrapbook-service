@@ -78,7 +78,13 @@ public sealed class ProcessPhotoSubmissionDecoder : IPhotoSubmissionDecoder
         {
             if (!process.HasExited)
             {
-                process.Kill(entireProcessTree: true);
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (Exception error) when ((error is InvalidOperationException or Win32Exception) && process.HasExited)
+                {
+                }
                 await process.WaitForExitAsync(CancellationToken.None);
             }
         }
