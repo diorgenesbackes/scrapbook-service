@@ -33,6 +33,10 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
         {
             details.Extensions["errors"] = new Dictionary<string, string[]> { [validation.Field] = ["Valor inválido."] };
         }
+        if (exception is SubmissionWindowException window)
+        {
+            details.Extensions["windowState"] = window.WindowState;
+        }
         details.Extensions["code"] = code;
         details.Extensions["correlationId"] = correlation;
         if (Activity.Current is { } activity && activity.TraceId != default)
@@ -59,7 +63,13 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
         EventStructuralLockedException => (409, "EVENT_LOCKED", "As informações deste evento estão travadas."),
         EventOpeningLockedException => (409, "EVENT_OPENING_LOCKED", "A data de abertura deste evento está travada."),
         EventVersionConflictException => (409, "EVENT_VERSION_CONFLICT", "O evento foi alterado em outra sessão."),
-        EventCreationKeyReusedException or InvitationKeyReusedException => (409, "IDEMPOTENCY_KEY_REUSED", "A chave já foi usada em outra tentativa."),
+        EventCreationKeyReusedException or InvitationKeyReusedException or SubmissionKeyReusedException =>
+            (409, "IDEMPOTENCY_KEY_REUSED", "A chave já foi usada em outra tentativa."),
+        SubmissionAttemptNotFoundException => (404, "RESOURCE_NOT_FOUND", "Envio indisponível."),
+        SubmissionWindowException window => (409, "UPLOAD_WINDOW_CLOSED", window.WindowState == "before"
+            ? "Novos envios ainda não estão disponíveis." : "O prazo para novos envios terminou."),
+        SubmissionConsentRequiredException => (409, "SUBMISSION_CONSENT_REQUIRED", "Confirme o aviso para continuar."),
+        SubmissionDeadlineExceededException => (409, "UPLOAD_COMPLETION_DEADLINE_EXCEEDED", "O prazo para concluir este envio terminou."),
         InvitationUnavailableException => (409, "INVITATION_UNAVAILABLE", "Este convite não está mais disponível. Solicite um novo."),
         InvitationEventLockedException => (409, "INVITATION_EVENT_LOCKED", "Os convites deste evento estão travados."),
         InvitationEventFullException => (409, "INVITATION_EVENT_FULL", "Este evento já tem dois responsáveis."),
@@ -67,7 +77,7 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
         InvitationAccountAlreadyLinkedException => (409, "INVITATION_ACCOUNT_ALREADY_LINKED", "Você já é responsável por este evento."),
         BadHttpRequestException { StatusCode: 413 } => (413, "REQUEST_TOO_LARGE", "Tamanho da solicitação excedido."),
         EventJsonMediaTypeException => (415, "UNSUPPORTED_MEDIA_TYPE", "Use application/json."),
-        PostgresUnavailableException or PublicEventTimeoutException or InvitationProtectionUnavailableException =>
+        PostgresUnavailableException or PublicEventTimeoutException or InvitationProtectionUnavailableException or SubmissionUnavailableException =>
             (503, "DEPENDENCY_UNAVAILABLE", "Dependência indisponível"),
         _ => (500, "UNEXPECTED_ERROR", "Falha interna")
     };
