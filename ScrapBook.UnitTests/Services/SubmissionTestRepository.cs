@@ -18,7 +18,8 @@ internal sealed class SubmissionTestRepository : ISubmissionRepository
     public EventWriteTestTransaction Transaction { get; } = new();
     public SubmissionAttemptEntity? Attempt { get; set; }
     public ConfirmTextSubmissionCommand? Inserted { get; private set; }
-    public SubmissionOutboxEntity? Outbox { get; private set; }
+    public List<SubmissionOutboxEntity> OutboxMessages { get; } = [];
+    public SubmissionOutboxEntity? Outbox => OutboxMessages.LastOrDefault();
     public bool PriorConfirmation { get; set; }
 
     public Task<IEventTransaction> BeginAsync(CancellationToken cancellationToken) => Task.FromResult<IEventTransaction>(Transaction);
@@ -48,7 +49,7 @@ internal sealed class SubmissionTestRepository : ISubmissionRepository
     public Task InsertOutboxAsync(SubmissionOutboxEntity message, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Outbox = message;
+        OutboxMessages.Add(message);
         return Task.CompletedTask;
     }
 }
