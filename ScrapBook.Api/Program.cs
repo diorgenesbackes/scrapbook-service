@@ -106,6 +106,7 @@ if (photoSubmissions.Enabled)
     builder.Services.AddSingleton(new PhotoSubmissionSettings(photoSubmissions.Enabled, photoSubmissions.Bucket));
     builder.Services.AddScoped<IPhotoSubmissionRepository, PhotoSubmissionRepository>();
     builder.Services.AddScoped<PhotoSubmissionService>();
+    builder.Services.AddSingleton<IPhotoSubmissionReporter, PhotoSubmissionReporter>();
     builder.Services.AddSingleton<IPhotoSubmissionDecoder, ProcessPhotoSubmissionDecoder>();
     builder.Services.AddSingleton<IAmazonS3>(_ => new AmazonS3Client(StorageConfiguration(photoSubmissions.StorageServiceUrl)));
     builder.Services.AddSingleton<IPhotoSubmissionStorage>(services =>

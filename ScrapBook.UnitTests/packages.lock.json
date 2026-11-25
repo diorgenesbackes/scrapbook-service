@@ -61,16 +61,16 @@
       },
       "Magick.NET-Q8-AnyCPU": {
         "type": "Transitive",
-        "resolved": "15.1.0",
-        "contentHash": "nHJpUfEkhiDu5XJAymHWQBCinVQJABTK2j6haHqs650UPUP9iEMqN73VNu8m+YyoyEp5gGwO65hqivhgzzpfnQ==",
+        "resolved": "15.1.1",
+        "contentHash": "rR5IddjNrgQKqYTQagVWPiXhqE1QbQRpMbOmfk8vnzWGEUGIw25cBFabKv1miPrY07bbU8NCFZmNtXkJ/+70ow==",
         "dependencies": {
-          "Magick.NET.Core": "15.1.0"
+          "Magick.NET.Core": "15.1.1"
         }
       },
       "Magick.NET.Core": {
         "type": "Transitive",
-        "resolved": "15.1.0",
-        "contentHash": "WIaemRN4tJvw5BNUfsO8/V3LojV5FOCojQ/sQ4ruXme1o2frRYfcvHPhKV5E6TbYoEdVEvtGX+8Wbut0F2lJHg=="
+        "resolved": "15.1.1",
+        "contentHash": "Jb8ph4BtzabDb9PRjXy1bWJVVZIelcOA1WicWzYgHhHeyzaKXbRgYdEq3DBQmFQgT/tw65oiyVTDee+SN1hX4Q=="
       },
       "Microsoft.CodeCoverage": {
         "type": "Transitive",
@@ -286,7 +286,7 @@
         "dependencies": {
           "AWSSDK.S3": "[4.1.0, )",
           "AWSSDK.SQS": "[4.1.0, )",
-          "Magick.NET-Q8-AnyCPU": "[15.1.0, )",
+          "Magick.NET-Q8-AnyCPU": "[15.1.1, )",
           "Microsoft.EntityFrameworkCore.Relational": "[10.0.12, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
           "ScrapBook.Domain": "[1.0.0, )"

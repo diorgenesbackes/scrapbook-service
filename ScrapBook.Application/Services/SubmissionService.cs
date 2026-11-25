@@ -64,7 +64,6 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
     {
         var attempt = await FindAuthorizedAttemptAsync(code, attemptKey, secret, cancellationToken);
         if (attempt.Format != "photo") throw new SubmissionAttemptNotFoundException();
-        RequirePhotoService();
         return Represent(attempt);
     }
 
@@ -227,7 +226,7 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         return (text, null, null, text);
     }
 
-    private PhotoSubmissionService RequirePhotoService() => photos ?? throw new SubmissionUnavailableException();
+    private PhotoSubmissionService RequirePhotoService() => photos ?? throw new PhotoSubmissionDisabledException();
 
     internal static string? NormalizeLineEndings(string? text) =>
         text?.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
