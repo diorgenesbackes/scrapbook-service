@@ -1,4 +1,5 @@
 using ScrapBook.Application.Services;
+using ScrapBook.Domain.Exceptions;
 
 namespace ScrapBook.Api.Workers;
 
@@ -26,7 +27,8 @@ public sealed class PhotoSubmissionWorker(IServiceScopeFactory scopes, ILogger<P
             var service = scope.ServiceProvider.GetRequiredService<PhotoSubmissionService>();
             return await work(service, cancellationToken);
         }
-        catch (Exception error) when (error is not OperationCanceledException)
+        catch (Exception error) when (error is PostgresUnavailableException or PostgresWriteRejectedException
+            or PhotoStorageUnavailableException)
         {
             logger.LogWarning("Photo submission work could not be completed. Failure category {FailureCategory}.",
                 error.GetType().Name);

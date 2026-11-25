@@ -13,7 +13,8 @@ using ScrapBook.Domain.Responses;
 namespace ScrapBook.Application.Services;
 
 public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, ISubmissionRepository submissions,
-    IPhotoSubmissionStorage storage, IPhotoSubmissionDecoder decoder, PhotoSubmissionSettings settings, TimeProvider clock)
+    IPhotoSubmissionStorage storage, IPhotoSubmissionDecoder decoder, PhotoSubmissionSettings settings, TimeProvider clock,
+    IPhotoSubmissionReporter? reporter = null)
 {
     public const string TemporaryPrefix = "submissions/temporary/";
     private const string OriginalPrefix = "submissions/original/";
@@ -171,6 +172,7 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
             {
                 await photos.ScheduleAsync(submission.SessionId, lease, clock.GetUtcNow().AddHours(1),
                     "photo-receipt-missing", cancellationToken);
+                reporter?.ReportMissingReceipt(submission.CorrelationId);
                 return;
             }
         }

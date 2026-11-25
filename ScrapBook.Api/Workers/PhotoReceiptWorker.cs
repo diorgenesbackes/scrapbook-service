@@ -51,8 +51,7 @@ public sealed class PhotoReceiptWorker(IAmazonSQS queue, PhotoSubmissionsOptions
             }
             await queue.DeleteMessageAsync(options.QueueUrl, message.ReceiptHandle, cancellationToken);
         }
-        catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException
-            or FormatException or PostgresUnavailableException)
+        catch (Exception error) when (error is JsonException or PostgresUnavailableException or PostgresWriteRejectedException)
         {
             logger.LogWarning("Photo receipt could not be recorded.");
         }

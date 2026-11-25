@@ -9,11 +9,18 @@ public static class S3PhotoReceiptReader
 {
     public static IReadOnlyList<PhotoReceiptModel> Read(string message)
     {
-        using var json = JsonDocument.Parse(message, new JsonDocumentOptions { MaxDepth = 16 });
-        if (json.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException();
-        if (json.RootElement.TryGetProperty("Event", out var testEvent) && testEvent.GetString() == "s3:TestEvent") return [];
-        var records = json.RootElement.GetProperty("Records");
-        return records.EnumerateArray().Select(ReadRecord).ToArray();
+        try
+        {
+            using var json = JsonDocument.Parse(message, new JsonDocumentOptions { MaxDepth = 16 });
+            if (json.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException();
+            if (json.RootElement.TryGetProperty("Event", out var testEvent) && testEvent.GetString() == "s3:TestEvent") return [];
+            var records = json.RootElement.GetProperty("Records");
+            return records.EnumerateArray().Select(ReadRecord).ToArray();
+        }
+        catch (Exception error) when (error is KeyNotFoundException or InvalidOperationException or FormatException)
+        {
+            throw new JsonException("Invalid photo receipt event.");
+        }
     }
 
     private static PhotoReceiptModel ReadRecord(JsonElement record)

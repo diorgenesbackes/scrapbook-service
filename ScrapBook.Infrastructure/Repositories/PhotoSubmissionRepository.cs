@@ -226,7 +226,10 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
             JOIN scrapbook.storage_objects AS temporary ON temporary.id = receipt.storage_object_id AND temporary.kind = 'temporary'
             JOIN scrapbook.files AS file ON file.id = temporary.storage_objects_files_id
             JOIN scrapbook.upload_sessions AS session ON session.upload_sessions_records_id = file.files_records_id
-            WHERE receipt.deleted_at IS NULL AND receipt.cleanup_after <= {now} AND session.terminal_at <= {terminalBefore}
+            WHERE receipt.deleted_at IS NULL AND receipt.cleanup_after <= {now}
+                AND ((session.state = 'expired'
+                    AND session.completion_deadline_at <= ({terminalBefore} AT TIME ZONE 'America/Sao_Paulo'))
+                    OR (session.state IN ('confirmed', 'rejected') AND session.terminal_at <= {terminalBefore}))
             ORDER BY receipt.cleanup_after, receipt.id LIMIT 1
             """).ToListAsync(cancellationToken));
         return rows.SingleOrDefault();
@@ -263,6 +266,11 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
         catch (NpgsqlException error) when (error.IsTransient)
         {
             throw new PostgresUnavailableException(error);
+        }
+        catch (PostgresException error) when (error.SqlState.StartsWith("23", StringComparison.Ordinal)
+            || error.SqlState == PostgresErrorCodes.RaiseException)
+        {
+            throw new PostgresWriteRejectedException();
         }
     }
 }
