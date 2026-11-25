@@ -24,11 +24,13 @@ DatabaseOptions database;
 DevelopmentIdentityOptions identity;
 PublicUiOriginOptions ui;
 InvitationProtectionOptions invitationProtection;
+SubmissionProtectionOptions submissionProtection;
 try
 {
     database = DatabaseOptions.FromConfiguration(builder.Configuration);
     ui = PublicUiOriginOptions.FromConfiguration(builder.Configuration);
     invitationProtection = InvitationProtectionOptions.FromConfiguration(builder.Configuration);
+    submissionProtection = SubmissionProtectionOptions.FromConfiguration(builder.Configuration);
     var isContainer = string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"),
         "true", StringComparison.OrdinalIgnoreCase);
     identity = DevelopmentIdentityOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(), isContainer);
@@ -53,8 +55,8 @@ if (ui.Origin is { } origin)
         PublicUiOriginOptions.PolicyName,
         policy => policy.WithOrigins(origin)
             .WithMethods(HttpMethods.Get, HttpMethods.Head, HttpMethods.Post, HttpMethods.Put)
-            .WithHeaders(CorrelationMiddleware.HeaderName, "Content-Type", "Idempotency-Key")
-            .WithExposedHeaders(CorrelationMiddleware.HeaderName, "Retry-After")));
+            .WithHeaders(CorrelationMiddleware.HeaderName, "Content-Type", "Idempotency-Key", "Authorization")
+            .WithExposedHeaders(CorrelationMiddleware.HeaderName, "Retry-After", "Location")));
 }
 
 var protection = builder.Services.AddDataProtection();
@@ -76,6 +78,10 @@ builder.Services.AddSingleton<IEventCursorCodec, EventCursorCodec>();
 builder.Services.AddScoped<IEventRepository, EventRepository>();
 builder.Services.AddScoped<IEventWriteRepository, EventWriteRepository>();
 builder.Services.AddScoped<IInvitationRepository, InvitationRepository>();
+builder.Services.AddScoped<ISubmissionRepository, SubmissionRepository>();
+builder.Services.AddSingleton<ISubmissionProtectionCodec>(new SubmissionProtectionCodec(
+    submissionProtection.KeyId, submissionProtection.Keys));
+builder.Services.AddScoped<SubmissionService>();
 builder.Services.AddSingleton<IInvitationTokenCodec>(new InvitationTokenCodec(
     invitationProtection.HashKeyId, invitationProtection.HashKeys, invitationProtection.EncryptionKeyId,
     invitationProtection.EncryptionKeys));
