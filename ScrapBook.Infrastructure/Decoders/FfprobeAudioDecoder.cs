@@ -32,7 +32,7 @@ public sealed class FfprobeAudioDecoder(string executablePath)
             if (!await ReadFramesAsync(path, container, tracks, budget.Token))
                 throw new PhotoContentInvalidException();
             await VerifyDecodeAsync(path, container, budget.Token);
-            var duration = tracks.Values.Max(track => track.Duration(webm));
+            var duration = PresentationDuration(tracks.Values, container);
             var primary = tracks.Values.FirstOrDefault(track => track.IsDefault) ?? tracks.Values.First();
             return new AudioMetadataModel(mediaType, container, primary.Codec, duration, sha256);
         }
@@ -44,6 +44,25 @@ public sealed class FfprobeAudioDecoder(string executablePath)
         {
             throw new PhotoContentInvalidException();
         }
+    }
+
+    private static decimal PresentationDuration(IEnumerable<AudioTrackTimingModel> tracks, string container)
+    {
+        decimal duration = 0;
+        decimal? first = container == "m4a" ? 0 : null;
+        decimal? last = null;
+        foreach (var track in tracks)
+        {
+            var trackDuration = track.Duration(container == "webm");
+            duration = Math.Max(duration, trackDuration);
+            if (track.PresentationStart is not { } start) continue;
+
+            var end = start + trackDuration;
+            first = Math.Min(first ?? start, start);
+            last = Math.Max(last ?? end, end);
+        }
+
+        return first is { } beginning && last is { } ending ? Math.Max(duration, ending - beginning) : duration;
     }
 
     private Task<string> ReadMetadataAsync(string path, bool webm, CancellationToken cancellationToken)

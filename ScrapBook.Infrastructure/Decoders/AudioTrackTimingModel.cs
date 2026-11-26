@@ -12,6 +12,7 @@ internal sealed class AudioTrackTimingModel(string codec, bool isDefault, int sa
 
     public string Codec => codec;
     public bool IsDefault => isDefault;
+    public decimal? PresentationStart => firstTimestamp is { } start ? Timestamp(start) : null;
 
     public void AddFrame(int samples, long? timestamp)
     {
