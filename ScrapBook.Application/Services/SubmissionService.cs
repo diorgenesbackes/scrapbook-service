@@ -270,7 +270,7 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         return new SubmissionOutboxEntity(FirstMessageId(eventId), FirstConfirmation, eventId, payload, correlationId, confirmedAt);
     }
 
-    private static SubmissionStatusResponse Represent(SubmissionAttemptEntity attempt)
+    private SubmissionStatusResponse Represent(SubmissionAttemptEntity attempt)
     {
         if (attempt.ConfirmedAt is { } confirmedAt)
         {
@@ -279,11 +279,16 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         var deadline = attempt.CompletionDeadlineAt is { } completionDeadline && attempt.State == "receiving"
             ? EventOpeningService.ToBrasiliaInstant(completionDeadline).ToUniversalTime()
             : (DateTimeOffset?)null;
+        if (attempt.Category == "moment" && deadline is { } cutoff && clock.GetUtcNow() >= cutoff)
+        {
+            return new SubmissionStatusResponse("reconciling");
+        }
         var pending = attempt.Category == "moment" && attempt.State == "receiving" ? attempt.PendingPositions : null;
         var problems = attempt.Category == "moment" && attempt.State is "rejected" or "expired"
-            ? attempt.ProblemPositions
+            && attempt.ProblemPositions is { } positions && attempt.ProblemCodes is { } codes
+            ? positions.Zip(codes, (position, code) => new PhotoPositionProblemModel(position, code)).ToArray()
             : null;
         return new SubmissionStatusResponse(attempt.State, CompletionDeadlineAt: deadline, Code: attempt.ResultCode,
-            PendingPositions: pending, ProblemPositions: problems);
+            PendingPositions: pending, Problems: problems);
     }
 }

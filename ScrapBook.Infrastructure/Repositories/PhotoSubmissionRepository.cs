@@ -259,7 +259,7 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
     }
 
     public Task TerminateAsync(PhotoSubmissionEntity submission, Guid lease, string state, string code,
-        IReadOnlyList<long> problemFileIds, DateTimeOffset now, CancellationToken cancellationToken) =>
+        IReadOnlyDictionary<long, string> problems, DateTimeOffset now, CancellationToken cancellationToken) =>
         ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
             WITH updated_session AS (
                 UPDATE scrapbook.upload_sessions
@@ -271,7 +271,10 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
                 WHERE id = {submission.RecordId} AND EXISTS (SELECT 1 FROM updated_session)
             ), updated_file AS (
                 UPDATE scrapbook.files
-                SET validation_state = 'rejected', error_code = CASE WHEN id = ANY ({problemFileIds.ToArray()}) THEN {code} END
+                SET validation_state = 'rejected', error_code = (
+                    SELECT problem.code FROM unnest({problems.Keys.ToArray()}, {problems.Values.ToArray()}) AS problem(file_id, code)
+                    WHERE problem.file_id = files.id
+                )
                 WHERE files_records_id = {submission.RecordId} AND EXISTS (SELECT 1 FROM updated_session)
             )
             UPDATE scrapbook.idempotent_operations

@@ -21,7 +21,7 @@ public interface IPhotoSubmissionRepository
     Task<bool> HasReceiptAsync(long storageObjectId, string versionId, CancellationToken cancellationToken);
     Task<bool> ConfirmAsync(ConfirmPhotoSubmissionCommand command, CancellationToken cancellationToken);
     Task TerminateAsync(PhotoSubmissionEntity submission, Guid lease, string state, string code,
-        IReadOnlyList<long> problemFileIds, DateTimeOffset now, CancellationToken cancellationToken);
+        IReadOnlyDictionary<long, string> problems, DateTimeOffset now, CancellationToken cancellationToken);
     Task<PhotoCleanupModel?> FindCleanupAsync(DateTimeOffset now, DateTimeOffset terminalBefore, CancellationToken cancellationToken);
     Task MarkDeletedAsync(PhotoCleanupModel cleanup, DateTimeOffset now, CancellationToken cancellationToken);
 }

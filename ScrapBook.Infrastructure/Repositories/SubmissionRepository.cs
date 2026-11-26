@@ -54,6 +54,11 @@ public sealed class SubmissionRepository(ScrapBookDbContext context) : ISubmissi
                     WHERE file.files_records_id = record.id AND file.error_code IS NOT NULL
                     ORDER BY file.position
                 ) AS "ProblemPositions",
+                ARRAY(
+                    SELECT file.error_code::text FROM scrapbook.files AS file
+                    WHERE file.files_records_id = record.id AND file.error_code IS NOT NULL
+                    ORDER BY file.position
+                ) AS "ProblemCodes",
                 CASE WHEN operation.state = 'in_progress' THEN session.state ELSE operation.state END AS "State",
                 record.confirmed_at AS "ConfirmedAt",
                 operation.hash_key_id AS "HashKeyId", operation.payload_hash AS "PayloadHash",

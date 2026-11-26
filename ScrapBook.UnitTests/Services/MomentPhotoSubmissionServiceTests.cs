@@ -143,6 +143,11 @@ public sealed class MomentPhotoSubmissionServiceTests
         Assert.Equal(Photo(2).TemporaryKey, Assert.Single(storage.Authorizations).Key);
         Assert.Equal(Deadline, grant.ExpiresAt);
 
+        clock.Now = Deadline;
+        var reconciling = await Submissions.GetAsync(SubmissionTestRepository.Code, attemptKey, secret, Token);
+        Assert.Equal(new SubmissionStatusResponse("reconciling"), reconciling);
+        await Assert.ThrowsAsync<SubmissionDeadlineExceededException>(() => AuthorizeAsync(File(2).FileKey));
+
         var reordered = Request([File(2) with { Position = 1 }, File(1) with { Position = 2 }, File(3)], "Legenda");
         await Assert.ThrowsAsync<SubmissionKeyReusedException>(() => CreateAsync(reordered));
     }
@@ -241,7 +246,7 @@ public sealed class MomentPhotoSubmissionServiceTests
 
         Assert.Equal(("expired", "submission-deadline-exceeded"), photos.Terminated);
         long[] affectedFileIds = arrivesLate ? [final.FileId] : [second.FileId, final.FileId];
-        Assert.Equal(affectedFileIds, photos.ProblemFileIds);
+        Assert.Equal(affectedFileIds, photos.Problems!.Keys);
         Assert.Empty(photos.Confirmations);
         Assert.Empty(storage.Reads);
         Assert.Empty(storage.Copies);
@@ -249,51 +254,55 @@ public sealed class MomentPhotoSubmissionServiceTests
         await AssertTerminalStatusAsync("expired", arrivesLate ? [3] : [2, 3]);
     }
 
-    [Fact]
-    public async Task RejectsTheWholeSetWhenOnlyTheSecondPhotoIsInvalidAsync()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RejectsTheWholeSetAndReportsEachInvalidPhotoAsync(bool thirdInvalid)
     {
         var first = Photo(1, Deadline.AddSeconds(-1), state: "validating");
         var invalid = Photo(2, Deadline, state: "validating", sha256: new byte[32]);
-        SetFiles(first, invalid);
+        var third = Photo(3, Deadline, state: "validating", sha256: thirdInvalid ? new byte[32] : null);
+        SetFiles(first, invalid, third);
         clock.Now = Deadline.AddMinutes(1);
 
         Assert.True(await Photos.ProcessNextAsync(Token));
 
-        Assert.Equal(new[] { first.TemporaryKey, invalid.TemporaryKey }, storage.Reads.Select(read => read.Key));
+        Assert.Equal(new[] { first.TemporaryKey, invalid.TemporaryKey, third.TemporaryKey }, storage.Reads.Select(read => read.Key));
         Assert.Equal(("rejected", "photo-invalid"), photos.Terminated);
-        Assert.Equal([invalid.FileId], photos.ProblemFileIds);
+        long[] affected = thirdInvalid ? [invalid.FileId, third.FileId] : [invalid.FileId];
+        Assert.Equal(affected, photos.Problems!.Keys);
         Assert.Empty(photos.Confirmations);
         Assert.Empty(storage.Copies);
         Assert.Empty(submissions.OutboxMessages);
         Assert.False(submissions.Transaction.Committed);
-        await AssertTerminalStatusAsync("rejected", [2]);
+        await AssertTerminalStatusAsync("rejected", thirdInvalid ? [2, 3] : [2]);
     }
 
     private void SetFiles(params PhotoSubmissionEntity[] files) => photos.Files = files;
 
     private PhotoSubmissionEntity Photo(int position, DateTimeOffset? receipt = null, string state = "receiving",
         byte[]? sha256 = null) => new()
-    {
-        SessionId = 7,
-        EventId = submissions.Event.Id,
-        RecordId = RecordId,
-        FileId = 50 + position,
-        TemporaryObjectId = 60 + position,
-        OriginalObjectId = 70 + position,
-        State = state,
-        Position = position,
-        Bucket = Bucket,
-        TemporaryKey = $"submissions/temporary/photo-{position}",
-        OriginalKey = $"submissions/original/photo-{position}",
-        TemporaryVersion = receipt is null ? null : $"received-{position}",
-        ReceiptAt = receipt,
-        FileKey = File(position).FileKey,
-        DeclaredMediaType = "image/png",
-        DeclaredSize = Bytes.Length,
-        Sha256 = sha256 ?? Hash,
-        StartedAt = new DateTime(2032, 3, 1, 11, 59, 59),
-        CompletionDeadlineAt = submissions.Event.CompletionDeadlineAt,
-    };
+        {
+            SessionId = 7,
+            EventId = submissions.Event.Id,
+            RecordId = RecordId,
+            FileId = 50 + position,
+            TemporaryObjectId = 60 + position,
+            OriginalObjectId = 70 + position,
+            State = state,
+            Position = position,
+            Bucket = Bucket,
+            TemporaryKey = $"submissions/temporary/photo-{position}",
+            OriginalKey = $"submissions/original/photo-{position}",
+            TemporaryVersion = receipt is null ? null : $"received-{position}",
+            ReceiptAt = receipt,
+            FileKey = File(position).FileKey,
+            DeclaredMediaType = "image/png",
+            DeclaredSize = Bytes.Length,
+            Sha256 = sha256 ?? Hash,
+            StartedAt = new DateTime(2032, 3, 1, 11, 59, 59),
+            CompletionDeadlineAt = submissions.Event.CompletionDeadlineAt,
+        };
 
     private static PhotoReceiptModel Receipt(PhotoSubmissionEntity photo, string version, DateTimeOffset receivedAt) =>
         new(photo.Bucket, photo.TemporaryKey, version, photo.DeclaredSize, receivedAt);
@@ -318,6 +327,7 @@ public sealed class MomentPhotoSubmissionServiceTests
             State = state,
             PendingPositions = pending,
             ProblemPositions = problems,
+            ProblemCodes = problems?.Select(position => photos.Problems![photos.Files!.Single(file => file.Position == position).FileId]).ToArray(),
             CompletionDeadlineAt = submissions.Event.CompletionDeadlineAt,
             ResultCode = resultCode,
             HashKeyId = admitted.HashKeyId,
@@ -331,14 +341,15 @@ public sealed class MomentPhotoSubmissionServiceTests
     {
         await CreateAsync(Request(photos.Files!.Select(file => File(file.Position)).ToArray()));
         var admitted = Assert.IsType<CreatePhotoSubmissionCommand>(photos.Admitted);
-        var filePositions = photos.Files!.Where(file => photos.ProblemFileIds!.Contains(file.FileId))
+        var filePositions = photos.Files!.Where(file => photos.Problems!.ContainsKey(file.FileId))
             .Select(file => file.Position).ToArray();
         SetAttempt(admitted, state, problems: filePositions, resultCode: photos.Terminated!.Value.Code);
 
         var status = await Submissions.GetAsync(SubmissionTestRepository.Code, attemptKey, secret, Token);
 
         Assert.Equal(state, status.State);
-        Assert.Equal(positions, status.ProblemPositions);
+        Assert.NotNull(status.Problems);
+        Assert.Equal(positions, status.Problems.Select(problem => problem.Position));
         Assert.Null(status.PendingPositions);
         Assert.Null(status.ConfirmedAt);
     }

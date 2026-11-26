@@ -13,7 +13,7 @@ internal sealed class PhotoSubmissionRepositoryStub(EventEntity item) : IPhotoSu
     public HashSet<string> ReceivedVersions { get; } = [];
     public List<PhotoReceiptModel> Pinned { get; } = [];
     public List<bool> Seals { get; } = [];
-    public IReadOnlyList<long>? ProblemFileIds { get; private set; }
+    public IReadOnlyDictionary<long, string>? Problems { get; private set; }
     public (DateTimeOffset DueAt, string? Error)? Scheduled { get; private set; }
     public (string State, string Code)? Terminated { get; private set; }
     public bool ConfirmationAccepted { get; set; } = true;
@@ -79,10 +79,10 @@ internal sealed class PhotoSubmissionRepositoryStub(EventEntity item) : IPhotoSu
     }
 
     public Task TerminateAsync(PhotoSubmissionEntity submission, Guid lease, string state, string code,
-        IReadOnlyList<long> problemFileIds, DateTimeOffset now, CancellationToken cancellationToken)
+        IReadOnlyDictionary<long, string> problems, DateTimeOffset now, CancellationToken cancellationToken)
     {
         Terminated = (state, code);
-        ProblemFileIds = problemFileIds;
+        Problems = problems;
         return Task.CompletedTask;
     }
 

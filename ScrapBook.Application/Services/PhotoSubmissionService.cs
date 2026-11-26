@@ -204,8 +204,9 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
             }
         }
 
-        await photos.TerminateAsync(submission, lease, "expired", "submission-deadline-exceeded",
-            missing.Select(file => file.FileId).ToArray(), clock.GetUtcNow(), cancellationToken);
+        const string expired = "submission-deadline-exceeded";
+        await photos.TerminateAsync(submission, lease, "expired", expired, missing.ToDictionary(file => file.FileId, _ => expired),
+            clock.GetUtcNow(), cancellationToken);
     }
 
     private async Task ValidateAndConfirmAsync(PhotoSubmissionEntity submission, Guid lease,
@@ -213,6 +214,8 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
     {
         var validated = new List<(PhotoSubmissionEntity File, string Version, DateTimeOffset ReceivedAt, PhotoImageModel Image)>(
             files.Count);
+        var rejected = new Dictionary<long, string>();
+        string? rejectionCode = null;
         foreach (var file in files)
         {
             if (file.TemporaryVersion is not { } version || file.ReceiptAt is not { } receivedAt)
@@ -227,16 +230,21 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
             }
             catch (PhotoContentInvalidException)
             {
-                await photos.TerminateAsync(submission, lease, "rejected", "photo-invalid", [file.FileId], clock.GetUtcNow(),
-                    cancellationToken);
-                return;
+                rejected.Add(file.FileId, "photo-invalid");
+                rejectionCode = "photo-invalid";
             }
             catch (PhotoDecoderBudgetException)
             {
-                await photos.TerminateAsync(submission, lease, "rejected", "photo-resource-budget", [file.FileId], clock.GetUtcNow(),
-                    cancellationToken);
-                return;
+                rejected.Add(file.FileId, "photo-resource-budget");
+                rejectionCode ??= "photo-resource-budget";
             }
+        }
+
+        if (rejectionCode is not null)
+        {
+            await photos.TerminateAsync(submission, lease, "rejected", rejectionCode, rejected, clock.GetUtcNow(),
+                cancellationToken);
+            return;
         }
 
         var originals = new List<ConfirmPhotoFileModel>(files.Count);
