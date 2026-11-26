@@ -2,7 +2,7 @@ namespace ScrapBook.Api.Options;
 
 public sealed record PhotoSubmissionsOptions(bool Enabled, string Bucket, string QueueUrl, string Region,
     string? StorageServiceUrl, string? QueueServiceUrl, string? BrowserStorageServiceUrl, bool ForcePathStyle,
-    bool VideoEnabled, string VideoProbePath)
+    bool VideoEnabled, string VideoProbePath, bool AudioEnabled = false)
 {
     private const string Section = "PhotoSubmissions";
     private const string DefaultVideoProbe = "/usr/bin/ffprobe";
@@ -14,6 +14,10 @@ public sealed record PhotoSubmissionsOptions(bool Enabled, string Bucket, string
         if (!bool.TryParse(section["VideoEnabled"] ?? "false", out var videoEnabled) || videoEnabled && !enabled)
         {
             throw new StartupConfigurationException(Section + ":VideoEnabled");
+        }
+        if (!bool.TryParse(section["AudioEnabled"] ?? "false", out var audioEnabled) || audioEnabled && !enabled)
+        {
+            throw new StartupConfigurationException(Section + ":AudioEnabled");
         }
         if (!enabled) return new(false, "", "", "", null, null, null, false, false, DefaultVideoProbe);
         if (!submissionsEnabled) throw new StartupConfigurationException(Section);
@@ -37,12 +41,16 @@ public sealed record PhotoSubmissionsOptions(bool Enabled, string Bucket, string
             throw new StartupConfigurationException(Section);
         }
         var videoProbePath = section["VideoProbePath"] ?? DefaultVideoProbe;
-        if (!Path.IsPathFullyQualified(videoProbePath) || videoEnabled && !File.Exists(videoProbePath))
+        if (!Path.IsPathFullyQualified(videoProbePath) || (videoEnabled || audioEnabled) && !File.Exists(videoProbePath))
+        {
+            throw new StartupConfigurationException(Section + ":VideoProbePath");
+        }
+        if (audioEnabled && !File.Exists(Path.Combine(Path.GetDirectoryName(videoProbePath)!, "ffmpeg")))
         {
             throw new StartupConfigurationException(Section + ":VideoProbePath");
         }
         return new(true, bucket, queue, region, storageEndpoint, queueEndpoint, browserEndpoint, forcePathStyle,
-            videoEnabled, videoProbePath);
+            videoEnabled, videoProbePath, audioEnabled);
     }
 
     private static string? ReadEndpoint(string? value, bool development) => value is null
