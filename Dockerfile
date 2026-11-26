@@ -17,6 +17,9 @@ RUN dotnet publish ScrapBook.Api/ScrapBook.Api.csproj --configuration Release --
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.12@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4
 WORKDIR /app
 COPY --from=build /out/ ./
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg=7:6.1.1-3ubuntu5 \
+    && rm -rf /var/lib/apt/lists/*
 RUN mkdir -m 0755 /app/certs
 ADD --chmod=0444 --checksum=sha256:b1711d12bae51838581281e23b6cb97b1074016873b4dafc80ed14002462dd77 https://truststore.pki.rds.amazonaws.com/us-east-1/us-east-1-bundle.pem /app/certs/rds-us-east-1.pem
 RUN mkdir /app/keys && chown app /app/keys && chmod 700 /app/keys
