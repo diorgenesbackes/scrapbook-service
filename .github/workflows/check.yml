@@ -14,9 +14,18 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
         with:
           persist-credentials: false
+          fetch-depth: 2
       - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
         with:
           global-json-file: global.json
       - run: dotnet restore ScrapBook.sln --locked-mode
       - run: dotnet build ScrapBook.sln --no-restore
       - run: dotnet test ScrapBook.sln --no-build --no-restore
+      - name: Verificar imagem Linux AMD64
+        run: |
+          set -euo pipefail
+          if git diff --quiet HEAD^ HEAD -- Dockerfile .dockerignore .github/workflows/check.yml; then
+            exit 0
+          fi
+          docker build --platform linux/amd64 --tag scrapbook-api-ci .
+          docker run --rm --network none --read-only --entrypoint /usr/bin/ffprobe scrapbook-api-ci -version
