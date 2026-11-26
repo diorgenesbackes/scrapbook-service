@@ -1,6 +1,8 @@
 using System.Globalization;
 using Amazon;
+using Amazon.Runtime;
 using Amazon.S3;
+using Amazon.SimpleNotificationService;
 using Amazon.SQS;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.DataProtection;
@@ -22,6 +24,7 @@ using ScrapBook.Domain.Interfaces;
 using ScrapBook.Domain.Models;
 using ScrapBook.Infrastructure.Codecs;
 using ScrapBook.Infrastructure.Decoders;
+using ScrapBook.Infrastructure.Messaging;
 using ScrapBook.Infrastructure.Persistence;
 using ScrapBook.Infrastructure.Probes;
 using ScrapBook.Infrastructure.Repositories;
@@ -41,6 +44,7 @@ PublicUiOriginOptions ui;
 InvitationProtectionOptions invitationProtection;
 SubmissionProtectionOptions submissionProtection;
 PhotoSubmissionsOptions photoSubmissions;
+EventStructuralLockOptions eventStructuralLock;
 try
 {
     database = DatabaseOptions.FromConfiguration(builder.Configuration);
@@ -49,6 +53,7 @@ try
     submissionProtection = SubmissionProtectionOptions.FromConfiguration(builder.Configuration);
     photoSubmissions = PhotoSubmissionsOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(),
         submissionProtection.KeyId is not null);
+    eventStructuralLock = EventStructuralLockOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment());
     var isContainer = string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"),
         "true", StringComparison.OrdinalIgnoreCase);
     identity = DevelopmentIdentityOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(), isContainer);
@@ -149,6 +154,24 @@ if (photoSubmissions.Enabled)
     builder.Services.AddHostedService<PhotoReceiptWorker>();
     builder.Services.AddHostedService<PhotoSubmissionWorker>();
 }
+if (eventStructuralLock.Enabled)
+{
+    builder.Services.AddScoped<IOutboxRepository, OutboxRepository>();
+    builder.Services.AddScoped<IEventStructuralLockRepository, EventStructuralLockRepository>();
+    builder.Services.AddScoped<OutboxPublisherService>();
+    builder.Services.AddScoped<EventStructuralLockService>();
+    builder.Services.AddSingleton<IAmazonSimpleNotificationService>(_ =>
+        new AmazonSimpleNotificationServiceClient(MessagingConfiguration(new AmazonSimpleNotificationServiceConfig(),
+            eventStructuralLock.SnsServiceUrl)));
+    builder.Services.AddKeyedSingleton<IAmazonSQS>(EventStructuralLockOptions.SectionName, (_, _) =>
+        new AmazonSQSClient(MessagingConfiguration(new AmazonSQSConfig(), eventStructuralLock.SqsServiceUrl)));
+    builder.Services.AddSingleton<IOutboxPublisher>(services => new SnsOutboxPublisher(
+        services.GetRequiredService<IAmazonSimpleNotificationService>(), eventStructuralLock.TopicArn));
+    builder.Services.AddSingleton<IEventStructuralLockQueue>(services => new SqsEventStructuralLockConsumer(
+        services.GetRequiredKeyedService<IAmazonSQS>(EventStructuralLockOptions.SectionName), eventStructuralLock.QueueUrl));
+    builder.Services.AddHostedService<OutboxPublisherWorker>();
+    builder.Services.AddHostedService<EventStructuralLockWorker>();
+}
 builder.Services.AddSingleton<IInvitationTokenCodec>(new InvitationTokenCodec(
     invitationProtection.HashKeyId, invitationProtection.HashKeys, invitationProtection.EncryptionKeyId,
     invitationProtection.EncryptionKeys));
@@ -201,6 +224,22 @@ AmazonS3Config StorageConfiguration(string? serviceUrl)
     else
     {
         config.RegionEndpoint = RegionEndpoint.GetBySystemName(photoSubmissions.Region);
+    }
+    return config;
+}
+
+T MessagingConfiguration<T>(T config, string? serviceUrl) where T : ClientConfig
+{
+    config.IgnoreConfiguredEndpointUrls = true;
+    config.MaxErrorRetry = 0;
+    if (serviceUrl is not null)
+    {
+        config.ServiceURL = serviceUrl;
+        config.AuthenticationRegion = eventStructuralLock.Region;
+    }
+    else
+    {
+        config.RegionEndpoint = RegionEndpoint.GetBySystemName(eventStructuralLock.Region);
     }
     return config;
 }
