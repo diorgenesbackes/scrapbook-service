@@ -25,60 +25,87 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan AuthorizationLifetime = TimeSpan.FromMinutes(10);
 
-    internal static (string? Text, string? Caption, PhotoManifestModel? File, string CanonicalPayload) NormalizePayload(
+    internal static (string? Text, string? Caption, IReadOnlyList<PhotoManifestModel> Files, string CanonicalPayload) NormalizePayload(
         CreateSubmissionRequest request)
     {
         if (request.Text is not null) throw new EventRequestValidationException("text");
-        if (request.Files is not [{ } file] || file.FileKey == Guid.Empty || file.Position != 1)
+        var maximumFiles = request.Category == "moment" ? 10 : 1;
+        if (request.Files is not { Count: > 0 } files || files.Count > maximumFiles)
         {
             throw new EventRequestValidationException("files");
         }
+
+        var keys = new HashSet<Guid>();
+        var manifests = new List<PhotoManifestModel>(files.Count);
+        for (var index = 0; index < files.Count; index++)
+        {
+            if (files[index] is not { } file || file.FileKey == Guid.Empty || file.Position != index + 1 || !keys.Add(file.FileKey))
+            {
+                throw new EventRequestValidationException("files");
+            }
+            manifests.Add(NormalizeFile(file, index));
+        }
+
+        var caption = SubmissionService.NormalizeLineEndings(request.Caption);
+        if (caption is not null) SubmissionService.EnsureText(caption, 500, "caption", requireContent: false);
+        var canonicalPayload = request.Category == "testimonial"
+            ? JsonSerializer.Serialize(new { request.Category, request.Format, caption, manifest = manifests[0] })
+            : JsonSerializer.Serialize(new { request.Category, request.Format, caption, manifests });
+        return (null, caption, manifests, "\0" + canonicalPayload);
+    }
+
+    private static PhotoManifestModel NormalizeFile(PhotoSubmissionFileRequest file, int index)
+    {
         if (file.DeclaredMediaType is not ("image/jpeg" or "image/png" or "image/heic" or "image/heif"))
         {
-            throw new EventRequestValidationException("files[0].declaredMediaType");
+            throw new EventRequestValidationException($"files[{index}].declaredMediaType");
         }
         if (file.SizeBytes is < 1 or > MaximumSize)
         {
-            throw new EventRequestValidationException("files[0].sizeBytes");
+            throw new EventRequestValidationException($"files[{index}].sizeBytes");
         }
         var hash = new byte[32];
         if (file.Sha256 is not { Length: 44 } sha256 || !Convert.TryFromBase64String(sha256, hash, out var written)
             || written != hash.Length || Convert.ToBase64String(hash) != sha256)
         {
-            throw new EventRequestValidationException("files[0].sha256");
+            throw new EventRequestValidationException($"files[{index}].sha256");
         }
-
-        var caption = SubmissionService.NormalizeLineEndings(request.Caption);
-        if (caption is not null) SubmissionService.EnsureText(caption, 500, "caption", requireContent: false);
-        var manifest = new PhotoManifestModel(file.FileKey, file.DeclaredMediaType, file.SizeBytes, hash);
-        var canonicalPayload = "\0" + JsonSerializer.Serialize(new { request.Category, request.Format, caption, manifest });
-        return (null, caption, manifest, canonicalPayload);
+        return new PhotoManifestModel(file.FileKey, file.DeclaredMediaType, file.SizeBytes, hash);
     }
 
-    internal async Task<SubmissionStatusResponse> AdmitAsync(EventEntity item, long noticeId, string name, string? caption,
-        PhotoManifestModel file, DateTimeOffset consentedAt, DateTimeOffset ingress, string operation, Guid attemptKey,
-        string keyId, byte[] payloadHash, byte[] authorizationHash, Guid correlationId, CancellationToken cancellationToken)
+    internal async Task<SubmissionStatusResponse> AdmitAsync(EventEntity item, long noticeId, string category, string name,
+        string? caption, IReadOnlyList<PhotoManifestModel> files, DateTimeOffset consentedAt, DateTimeOffset ingress,
+        string operation, Guid attemptKey, string keyId, byte[] payloadHash, byte[] authorizationHash, Guid correlationId,
+        CancellationToken cancellationToken)
+    {
+        var intents = files.Select(CreateIntent).ToArray();
+        var command = new CreatePhotoSubmissionCommand(item, noticeId, category, name, caption, intents,
+            SubmissionService.Civil(consentedAt), SubmissionService.Civil(ingress), operation, attemptKey, keyId, payloadHash,
+            authorizationHash, ingress.AddDays(30), correlationId, settings.Bucket);
+        await photos.InsertAsync(command, cancellationToken);
+        var pending = category == "moment" ? intents.Select(file => file.Position).ToArray() : null;
+        return new SubmissionStatusResponse("receiving", CompletionDeadlineAt: Deadline(item.CompletionDeadlineAt),
+            PendingPositions: pending);
+    }
+
+    private static PhotoUploadIntentModel CreateIntent(PhotoManifestModel file, int index)
     {
         var objectKey = Guid.NewGuid().ToString("N");
-        var command = new CreatePhotoSubmissionCommand(item, noticeId, name, caption, file, SubmissionService.Civil(consentedAt),
-            SubmissionService.Civil(ingress), operation, attemptKey, keyId, payloadHash, authorizationHash, ingress.AddDays(30),
-            correlationId, settings.Bucket, TemporaryPrefix + objectKey, OriginalPrefix + objectKey);
-        await photos.InsertAsync(command, cancellationToken);
-        return new SubmissionStatusResponse("receiving", CompletionDeadlineAt: Deadline(item.CompletionDeadlineAt));
+        return new PhotoUploadIntentModel(file, index + 1, TemporaryPrefix + objectKey, OriginalPrefix + objectKey);
     }
 
     public async Task<PhotoUploadAuthorizationResponse> AuthorizeAsync(long recordId, Guid fileKey, DateTimeOffset credentialExpiry,
         CancellationToken cancellationToken)
     {
-        var submission = await photos.FindForRecordAsync(recordId, cancellationToken);
-        if (submission is null || submission.FileKey != fileKey)
-        {
-            throw new SubmissionAttemptNotFoundException();
-        }
+        var submission = await photos.FindForRecordAsync(recordId, fileKey, cancellationToken)
+            ?? throw new SubmissionAttemptNotFoundException();
         var now = clock.GetUtcNow();
         var expiresAt = Deadline(submission.CompletionDeadlineAt);
         if (expiresAt <= now) throw new SubmissionDeadlineExceededException();
-        if (submission.State != "receiving") throw new PhotoUploadUnavailableException();
+        if (submission.State != "receiving" || submission.TemporaryVersion is not null)
+        {
+            throw new PhotoUploadUnavailableException();
+        }
         if (credentialExpiry < expiresAt) expiresAt = credentialExpiry;
         var shortExpiry = now.Add(AuthorizationLifetime);
         if (shortExpiry < expiresAt) expiresAt = shortExpiry;
@@ -98,7 +125,9 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
             && receipt.ReceivedAt >= Deadline(submission.StartedAt)
             && receipt.ReceivedAt <= Deadline(submission.CompletionDeadlineAt))
         {
-            await photos.PinAsync(submission, receipt, now, cancellationToken);
+            var files = await photos.FindFilesAsync(submission.RecordId, cancellationToken);
+            var seal = files.All(file => file.FileId == submission.FileId || file.TemporaryVersion is not null);
+            await photos.PinAsync(submission, receipt, now, seal, cancellationToken);
         }
         await transaction.CommitAsync(cancellationToken);
     }
@@ -118,22 +147,15 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
         budget.CancelAfter(LeaseDuration - TimeSpan.FromMinutes(1));
         try
         {
-            if (submission.TemporaryVersion is null)
+            var files = await photos.FindFilesAsync(submission.RecordId, budget.Token);
+            if (submission.State == "receiving")
             {
-                await ReconcileExpiryAsync(submission, lease, budget.Token);
+                await ReconcileExpiryAsync(submission, lease, files, budget.Token);
             }
             else
             {
-                await ValidateAndConfirmAsync(submission, lease, budget.Token);
+                await ValidateAndConfirmAsync(submission, lease, files, budget.Token);
             }
-        }
-        catch (PhotoContentInvalidException)
-        {
-            await photos.TerminateAsync(submission, lease, "rejected", "photo-invalid", clock.GetUtcNow(), cancellationToken);
-        }
-        catch (PhotoDecoderBudgetException)
-        {
-            await photos.TerminateAsync(submission, lease, "rejected", "photo-resource-budget", clock.GetUtcNow(), cancellationToken);
         }
         catch (PhotoDecoderUnavailableException)
         {
@@ -163,42 +185,83 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
         return true;
     }
 
-    private async Task ReconcileExpiryAsync(PhotoSubmissionEntity submission, Guid lease, CancellationToken cancellationToken)
+    private async Task ReconcileExpiryAsync(PhotoSubmissionEntity submission, Guid lease,
+        IReadOnlyList<PhotoSubmissionEntity> files, CancellationToken cancellationToken)
     {
-        var versions = await storage.ListVersionsAsync(submission.Bucket, submission.TemporaryKey, cancellationToken);
-        foreach (var version in versions)
+        var missing = files.Where(file => file.TemporaryVersion is null).ToArray();
+        foreach (var file in missing)
         {
-            if (!await photos.HasReceiptAsync(submission.TemporaryObjectId, version.VersionId, cancellationToken))
+            var versions = await storage.ListVersionsAsync(file.Bucket, file.TemporaryKey, cancellationToken);
+            foreach (var version in versions)
             {
-                await photos.ScheduleAsync(submission.SessionId, lease, clock.GetUtcNow().AddHours(1),
-                    "photo-receipt-missing", cancellationToken);
-                reporter?.ReportMissingReceipt(submission.CorrelationId);
+                if (!await photos.HasReceiptAsync(file.TemporaryObjectId, version.VersionId, cancellationToken))
+                {
+                    await photos.ScheduleAsync(submission.SessionId, lease, clock.GetUtcNow().AddHours(1),
+                        "photo-receipt-missing", cancellationToken);
+                    reporter?.ReportMissingReceipt(submission.CorrelationId);
+                    return;
+                }
+            }
+        }
+
+        await photos.TerminateAsync(submission, lease, "expired", "submission-deadline-exceeded",
+            missing.Select(file => file.FileId).ToArray(), clock.GetUtcNow(), cancellationToken);
+    }
+
+    private async Task ValidateAndConfirmAsync(PhotoSubmissionEntity submission, Guid lease,
+        IReadOnlyList<PhotoSubmissionEntity> files, CancellationToken cancellationToken)
+    {
+        var validated = new List<(PhotoSubmissionEntity File, string Version, DateTimeOffset ReceivedAt, PhotoImageModel Image)>(
+            files.Count);
+        foreach (var file in files)
+        {
+            if (file.TemporaryVersion is not { } version || file.ReceiptAt is not { } receivedAt)
+            {
+                throw new PhotoStorageUnavailableException();
+            }
+
+            try
+            {
+                var image = await ValidateAsync(file, version, cancellationToken);
+                validated.Add((file, version, receivedAt, image));
+            }
+            catch (PhotoContentInvalidException)
+            {
+                await photos.TerminateAsync(submission, lease, "rejected", "photo-invalid", [file.FileId], clock.GetUtcNow(),
+                    cancellationToken);
+                return;
+            }
+            catch (PhotoDecoderBudgetException)
+            {
+                await photos.TerminateAsync(submission, lease, "rejected", "photo-resource-budget", [file.FileId], clock.GetUtcNow(),
+                    cancellationToken);
                 return;
             }
         }
 
-        await photos.TerminateAsync(submission, lease, "expired", "submission-deadline-exceeded", clock.GetUtcNow(),
-            cancellationToken);
+        var originals = new List<ConfirmPhotoFileModel>(files.Count);
+        foreach (var (file, version, receivedAt, image) in validated)
+        {
+            var original = await PreserveAsync(file, version, image.MediaType, cancellationToken);
+            originals.Add(new ConfirmPhotoFileModel(file, image, original, SubmissionService.Civil(receivedAt)));
+        }
+
+        await ConfirmAsync(submission, lease, validated.Max(file => file.ReceivedAt), originals, cancellationToken);
     }
 
-    private async Task ValidateAndConfirmAsync(PhotoSubmissionEntity submission, Guid lease, CancellationToken cancellationToken)
+    private async Task<PhotoImageModel> ValidateAsync(PhotoSubmissionEntity file, string version, CancellationToken cancellationToken)
     {
-        var sourceVersion = submission.TemporaryVersion ?? throw new PhotoStorageUnavailableException();
-        var receivedAt = submission.ReceiptAt ?? throw new PhotoStorageUnavailableException();
-        var bytes = await storage.ReadAsync(submission.Bucket, submission.TemporaryKey, sourceVersion,
-            submission.DeclaredSize, cancellationToken);
-        if (!MatchesContent(bytes, submission))
+        var bytes = await storage.ReadAsync(file.Bucket, file.TemporaryKey, version, file.DeclaredSize, cancellationToken);
+        if (!MatchesContent(bytes, file))
         {
             throw new PhotoContentInvalidException();
         }
         var image = await decoder.DecodeAsync(bytes, cancellationToken);
-        if (!MatchesMediaType(submission.DeclaredMediaType, image.MediaType))
+        if (!MatchesMediaType(file.DeclaredMediaType, image.MediaType))
         {
             throw new PhotoContentInvalidException();
         }
-
-        var original = await PreserveAsync(submission, sourceVersion, image.MediaType, cancellationToken);
-        await ConfirmAsync(submission, lease, receivedAt, image, original, cancellationToken);
+        return image;
     }
 
     private async Task<PhotoObjectModel> PreserveAsync(PhotoSubmissionEntity submission, string sourceVersion, string mediaType,
@@ -241,8 +304,8 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
         }
     }
 
-    private async Task ConfirmAsync(PhotoSubmissionEntity submission, Guid lease, DateTimeOffset receivedAt, PhotoImageModel image,
-        PhotoObjectModel original, CancellationToken cancellationToken)
+    private async Task ConfirmAsync(PhotoSubmissionEntity submission, Guid lease, DateTimeOffset receivedAt,
+        IReadOnlyList<ConfirmPhotoFileModel> files, CancellationToken cancellationToken)
     {
         await using var transaction = await submissions.BeginAsync(cancellationToken);
         var item = await photos.LockEventAsync(submission.EventId, cancellationToken)
@@ -253,7 +316,7 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
         var committedAt = new DateTimeOffset(adjusted.UtcTicks - adjusted.UtcTicks % 10, TimeSpan.Zero);
         var first = item.LockedAt is null && !await submissions.HasConfirmedAsync(item.Id, SubmissionService.FirstMessageId(item.Id),
             cancellationToken);
-        var command = new ConfirmPhotoSubmissionCommand(submission, lease, image, original, SubmissionService.Civil(receivedAt),
+        var command = new ConfirmPhotoSubmissionCommand(submission, lease, files, SubmissionService.Civil(receivedAt),
             SubmissionService.Civil(committedAt), committedAt);
         if (!await photos.ConfirmAsync(command, cancellationToken)) return;
         if (first)
@@ -261,18 +324,26 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
             await submissions.InsertOutboxAsync(SubmissionService.FirstConfirmationMessage(item.Id, submission.RecordId,
                 correlation, committedAt), cancellationToken);
         }
+        foreach (var file in files)
+        {
+            await submissions.InsertOutboxAsync(MediaConfirmationMessage(file.File, correlation, committedAt), cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static SubmissionOutboxEntity MediaConfirmationMessage(PhotoSubmissionEntity file, Guid correlation,
+        DateTimeOffset committedAt)
+    {
         var mediaId = new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(
-            MediaConfirmation + ":" + submission.FileId.ToString(CultureInfo.InvariantCulture))).AsSpan(0, 16));
+            MediaConfirmation + ":" + file.FileId.ToString(CultureInfo.InvariantCulture))).AsSpan(0, 16));
         var payload = JsonSerializer.Serialize(new
         {
-            eventId = item.Id.ToString(CultureInfo.InvariantCulture),
-            recordId = submission.RecordId.ToString(CultureInfo.InvariantCulture),
-            fileId = submission.FileId.ToString(CultureInfo.InvariantCulture),
+            eventId = file.EventId.ToString(CultureInfo.InvariantCulture),
+            recordId = file.RecordId.ToString(CultureInfo.InvariantCulture),
+            fileId = file.FileId.ToString(CultureInfo.InvariantCulture),
             confirmedAt = committedAt
         });
-        await submissions.InsertOutboxAsync(new SubmissionOutboxEntity(mediaId, MediaConfirmation, item.Id, payload,
-            correlation, committedAt), cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        return new SubmissionOutboxEntity(mediaId, MediaConfirmation, file.EventId, payload, correlation, committedAt);
     }
 
     private static bool MatchesContent(byte[] bytes, PhotoSubmissionEntity submission) =>

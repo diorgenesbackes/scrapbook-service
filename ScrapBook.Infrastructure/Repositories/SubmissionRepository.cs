@@ -40,8 +40,20 @@ public sealed class SubmissionRepository(ScrapBookDbContext context) : ISubmissi
         CancellationToken cancellationToken)
     {
         var rows = await ReadAsync(() => context.Database.SqlQuery<SubmissionAttemptEntity>($"""
-            SELECT record.id AS "RecordId", record.format AS "Format", operation.result_code AS "ResultCode",
-                session.completion_deadline_at AS "CompletionDeadlineAt",
+            SELECT record.id AS "RecordId", record.format AS "Format", record.category AS "Category",
+                operation.result_code AS "ResultCode", session.completion_deadline_at AS "CompletionDeadlineAt",
+                ARRAY(
+                    SELECT file.position::integer FROM scrapbook.files AS file
+                    JOIN scrapbook.storage_objects AS temporary
+                        ON temporary.storage_objects_files_id = file.id AND temporary.kind = 'temporary'
+                    WHERE file.files_records_id = record.id AND temporary.version_id IS NULL
+                    ORDER BY file.position
+                ) AS "PendingPositions",
+                ARRAY(
+                    SELECT file.position::integer FROM scrapbook.files AS file
+                    WHERE file.files_records_id = record.id AND file.error_code IS NOT NULL
+                    ORDER BY file.position
+                ) AS "ProblemPositions",
                 CASE WHEN operation.state = 'in_progress' THEN session.state ELSE operation.state END AS "State",
                 record.confirmed_at AS "ConfirmedAt",
                 operation.hash_key_id AS "HashKeyId", operation.payload_hash AS "PayloadHash",

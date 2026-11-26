@@ -92,8 +92,8 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
 
         var identification = request.Identification ?? throw new SubmissionConsentRequiredException();
         var name = NormalizeName(identification.GuestName, "identification.guestName");
-        if (request.Category != "testimonial") throw new EventRequestValidationException("category");
-        var (text, caption, file, canonicalPayload) = NormalizePayload(request);
+        if (request.Category is not ("testimonial" or "moment")) throw new EventRequestValidationException("category");
+        var (text, caption, files, canonicalPayload) = NormalizePayload(request);
         if (existing is not null)
         {
             var hash = protection.HashPayload(existing.HashKeyId!, item.Id, identification.NoticeCode ?? "", name, canonicalPayload);
@@ -105,17 +105,18 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         }
 
         EnsureWindow(item, ingress);
-        if (file is null && receivedAt > EventOpeningService.ToBrasiliaInstant(item.CompletionDeadlineAt))
+        if (files is null && receivedAt > EventOpeningService.ToBrasiliaInstant(item.CompletionDeadlineAt))
         {
             throw new SubmissionDeadlineExceededException();
         }
 
         var notice = await FindNoticeAsync(ingress, cancellationToken);
         var consentedAt = RequireConsent(identification, item.Id, notice, name, ingress);
-        if (file is not null)
+        if (files is not null)
         {
-            var status = await RequirePhotoService().AdmitAsync(item, notice.Id, name, caption, file, consentedAt, ingress,
-                Operation, attemptKey, keyId, protection.HashPayload(keyId, item.Id, notice.Code, name, canonicalPayload)!,
+            var status = await RequirePhotoService().AdmitAsync(item, notice.Id, request.Category, name, caption, files,
+                consentedAt, ingress, Operation, attemptKey, keyId,
+                protection.HashPayload(keyId, item.Id, notice.Code, name, canonicalPayload)!,
                 protection.HashAuthorization(keyId, item.Id, attemptKey, secret)!, correlationId, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return new CreateSubmissionResponse(true, status);
@@ -212,14 +213,14 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         return result;
     }
 
-    private static (string? Text, string? Caption, PhotoManifestModel? File, string CanonicalPayload) NormalizePayload(
+    private static (string? Text, string? Caption, IReadOnlyList<PhotoManifestModel>? Files, string CanonicalPayload) NormalizePayload(
         CreateSubmissionRequest request)
     {
         if (request.Format == "photo")
         {
             return PhotoSubmissionService.NormalizePayload(request);
         }
-        if (request.Format != "text") throw new EventRequestValidationException("format");
+        if (request.Format != "text" || request.Category != "testimonial") throw new EventRequestValidationException("format");
         if (request.Caption is not null || request.Files is not null) throw new EventRequestValidationException("format");
         var text = NormalizeLineEndings(request.Text) ?? throw new EventRequestValidationException("text");
         EnsureText(text, 5000, "text");
@@ -278,6 +279,11 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         var deadline = attempt.CompletionDeadlineAt is { } completionDeadline && attempt.State == "receiving"
             ? EventOpeningService.ToBrasiliaInstant(completionDeadline).ToUniversalTime()
             : (DateTimeOffset?)null;
-        return new SubmissionStatusResponse(attempt.State, CompletionDeadlineAt: deadline, Code: attempt.ResultCode);
+        var pending = attempt.Category == "moment" && attempt.State == "receiving" ? attempt.PendingPositions : null;
+        var problems = attempt.Category == "moment" && attempt.State is "rejected" or "expired"
+            ? attempt.ProblemPositions
+            : null;
+        return new SubmissionStatusResponse(attempt.State, CompletionDeadlineAt: deadline, Code: attempt.ResultCode,
+            PendingPositions: pending, ProblemPositions: problems);
     }
 }

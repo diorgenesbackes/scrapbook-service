@@ -6,6 +6,7 @@ public sealed class PhotoSubmissionEntity
     public long EventId { get; init; }
     public long RecordId { get; init; }
     public long FileId { get; init; }
+    public int Position { get; init; }
     public long TemporaryObjectId { get; init; }
     public long OriginalObjectId { get; init; }
     public required string State { get; init; }
