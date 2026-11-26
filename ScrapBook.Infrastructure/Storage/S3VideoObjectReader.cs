@@ -18,7 +18,9 @@ internal static class S3VideoObjectReader
         {
             using var response = await storage.GetObjectAsync(new GetObjectRequest
             {
-                BucketName = bucket, Key = key, VersionId = versionId
+                BucketName = bucket,
+                Key = key,
+                VersionId = versionId
             }, cancellationToken);
             if (response.VersionId != versionId) throw new PhotoStorageUnavailableException();
             if (response.ContentLength != expectedSize || expectedSize <= 0) throw new PhotoContentInvalidException();

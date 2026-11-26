@@ -66,7 +66,10 @@ public sealed class S3PhotoSubmissionStorage(IAmazonS3 storage, IAmazonS3 browse
         {
             var response = await storage.InitiateMultipartUploadAsync(new InitiateMultipartUploadRequest
             {
-                BucketName = bucket, Key = key, ContentType = mediaType, ChecksumAlgorithm = ChecksumAlgorithm.SHA256,
+                BucketName = bucket,
+                Key = key,
+                ContentType = mediaType,
+                ChecksumAlgorithm = ChecksumAlgorithm.SHA256,
                 ChecksumType = ChecksumType.COMPOSITE
             }, cancellationToken);
             return RequireUploadId(response.UploadId);
@@ -107,10 +110,14 @@ public sealed class S3PhotoSubmissionStorage(IAmazonS3 storage, IAmazonS3 browse
         {
             var response = await storage.CompleteMultipartUploadAsync(new CompleteMultipartUploadRequest
             {
-                BucketName = bucket, Key = key, UploadId = uploadId,
+                BucketName = bucket,
+                Key = key,
+                UploadId = uploadId,
                 PartETags = parts.OrderBy(part => part.PartNumber).Select(part => new PartETag
                 {
-                    PartNumber = part.PartNumber, ETag = part.ETag, ChecksumSHA256 = Convert.ToBase64String(part.Sha256)
+                    PartNumber = part.PartNumber,
+                    ETag = part.ETag,
+                    ChecksumSHA256 = Convert.ToBase64String(part.Sha256)
                 }).ToList()
             }, cancellationToken);
             return RequireVersion(response.VersionId);
@@ -121,7 +128,9 @@ public sealed class S3PhotoSubmissionStorage(IAmazonS3 storage, IAmazonS3 browse
         {
             await storage.AbortMultipartUploadAsync(new AbortMultipartUploadRequest
             {
-                BucketName = bucket, Key = key, UploadId = uploadId
+                BucketName = bucket,
+                Key = key,
+                UploadId = uploadId
             }, cancellationToken);
             return string.Empty;
         });
@@ -135,7 +144,9 @@ public sealed class S3PhotoSubmissionStorage(IAmazonS3 storage, IAmazonS3 browse
         {
             using var response = await storage.GetObjectAsync(new GetObjectRequest
             {
-                BucketName = bucket, Key = key, VersionId = versionId
+                BucketName = bucket,
+                Key = key,
+                VersionId = versionId
             }, cancellationToken);
             if (response.VersionId != versionId) throw new PhotoStorageUnavailableException();
             if (response.ContentLength != expectedSize) throw new PhotoContentInvalidException();
@@ -158,7 +169,9 @@ public sealed class S3PhotoSubmissionStorage(IAmazonS3 storage, IAmazonS3 browse
         {
             var result = await storage.ListVersionsAsync(new ListVersionsRequest
             {
-                BucketName = bucket, Prefix = key, MaxKeys = MaximumVersions
+                BucketName = bucket,
+                Prefix = key,
+                MaxKeys = MaximumVersions
             }, cancellationToken);
             if (result.IsTruncated == true) throw new PhotoStorageUnavailableException();
             return (result.Versions ?? []).Where(version => version.Key == key && version.IsDeleteMarker != true)
@@ -173,7 +186,10 @@ public sealed class S3PhotoSubmissionStorage(IAmazonS3 storage, IAmazonS3 browse
             {
                 var result = await storage.GetObjectMetadataAsync(new GetObjectMetadataRequest
                 {
-                    BucketName = bucket, Key = key, VersionId = versionId, ChecksumMode = ChecksumMode.ENABLED
+                    BucketName = bucket,
+                    Key = key,
+                    VersionId = versionId,
+                    ChecksumMode = ChecksumMode.ENABLED
                 }, cancellationToken);
                 var sha256 = new byte[32];
                 var verified = result.ChecksumSHA256 is { } checksum
@@ -215,7 +231,9 @@ public sealed class S3PhotoSubmissionStorage(IAmazonS3 storage, IAmazonS3 browse
             {
                 await storage.DeleteObjectAsync(new DeleteObjectRequest
                 {
-                    BucketName = bucket, Key = key, VersionId = versionId
+                    BucketName = bucket,
+                    Key = key,
+                    VersionId = versionId
                 }, cancellationToken);
             }
             catch (AmazonS3Exception error) when (error.StatusCode == HttpStatusCode.NotFound)
@@ -234,7 +252,11 @@ public sealed class S3PhotoSubmissionStorage(IAmazonS3 storage, IAmazonS3 browse
     {
         var request = new GetPreSignedUrlRequest
         {
-            BucketName = bucket, Key = key, Verb = HttpVerb.PUT, Protocol = protocol, Expires = expiresAt.UtcDateTime
+            BucketName = bucket,
+            Key = key,
+            Verb = HttpVerb.PUT,
+            Protocol = protocol,
+            Expires = expiresAt.UtcDateTime
         };
         request.Headers[ChecksumHeader] = Convert.ToBase64String(sha256);
         request.Headers["Content-Length"] = size.ToString(CultureInfo.InvariantCulture);
