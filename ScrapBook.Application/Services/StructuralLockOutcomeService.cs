@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using ScrapBook.Application.Codecs;
 using ScrapBook.Domain.Entities;
 using ScrapBook.Domain.Interfaces;
 using ScrapBook.Domain.Models;
@@ -40,8 +41,9 @@ internal static class StructuralLockOutcomeService
     {
         var code = EventStructuralLockFactService.OutsideReplayHorizon(message, now)
             && processed.ErrorCode != EventStructuralLockFactService.ReplayAuthorized ? ReplayExpired : ConsumeExhausted;
-        await locks.QuarantineAsync(processed.Id, code, now, cancellationToken);
-        await outbox.InsertResultAsync(Failed(message, now, "consume", code), cancellationToken);
+        var failedAt = FirstRecordConfirmedCodec.MicrosecondPrecision(now);
+        await locks.QuarantineAsync(processed.Id, code, failedAt, cancellationToken);
+        await outbox.InsertResultAsync(Failed(message, failedAt, "consume", code), cancellationToken);
     }
 
     private static StructuralLockOutboxEntity Outcome(FirstRecordConfirmedModel message, string type, string kind,

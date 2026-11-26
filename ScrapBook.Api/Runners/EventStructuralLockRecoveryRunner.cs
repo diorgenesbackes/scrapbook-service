@@ -32,6 +32,11 @@ public static class EventStructuralLockRecoveryRunner
             {
                 command = command with { Evidence = await ReadEvidenceAsync(deadline.Token) };
             }
+            if (!EventStructuralLockRecoveryService.IsValid(command))
+            {
+                return WriteResult(EventStructuralLockRecoveryResult.InvalidArguments);
+            }
+
             var builder = Host.CreateApplicationBuilder();
             var database = DatabaseOptions.FromConfiguration(builder.Configuration);
             builder.Logging.ClearProviders();
@@ -47,10 +52,14 @@ public static class EventStructuralLockRecoveryRunner
             return WriteResult(await service.RecoverAsync(command, deadline.Token));
         }
         catch (Exception error) when (error is StartupConfigurationException or PostgresUnavailableException
-            or PostgresWriteRejectedException or IOException or DecoderFallbackException)
+            or PostgresWriteRejectedException or IOException)
         {
             Console.Error.WriteLine("RECOVERY_UNAVAILABLE");
             return 4;
+        }
+        catch (DecoderFallbackException)
+        {
+            return WriteResult(EventStructuralLockRecoveryResult.InvalidArguments);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && deadline.IsCancellationRequested)
         {

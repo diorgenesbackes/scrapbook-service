@@ -68,10 +68,11 @@ public sealed class EventStructuralLockService(IEventWriteRepository events, IIn
             return EventStructuralLockResult.Rejected;
         }
 
-        await ApplyAsync(item, message, now, cancellationToken);
-        await locks.CompleteAsync(processed.Id, now, cancellationToken);
+        var lockedAt = FirstRecordConfirmedCodec.MicrosecondPrecision(now);
+        await ApplyAsync(item, message, lockedAt, cancellationToken);
+        await locks.CompleteAsync(processed.Id, lockedAt, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        EventStructuralLockTelemetry.RecordLock((now - message.ConfirmedAt).TotalSeconds);
+        EventStructuralLockTelemetry.RecordLock((clock.GetUtcNow() - message.ConfirmedAt).TotalSeconds);
         return EventStructuralLockResult.Applied;
     }
 

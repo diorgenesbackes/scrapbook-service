@@ -15,7 +15,7 @@ public sealed class EventStructuralLockRecoveryService(IEventWriteRepository eve
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!ValidCommand(command))
+        if (!IsValid(command))
         {
             return EventStructuralLockRecoveryResult.InvalidArguments;
         }
@@ -148,11 +148,12 @@ public sealed class EventStructuralLockRecoveryService(IEventWriteRepository eve
         command.Mode == EventStructuralLockRecoveryMode.ReconcileDlq && originalState is "published" or "failed"
         || command.Mode == EventStructuralLockRecoveryMode.Publish && expired && command.ReconcileExpired && originalState == "failed";
 
-    private static bool ValidCommand(EventStructuralLockRecoveryCommand command) =>
+    public static bool IsValid(EventStructuralLockRecoveryCommand command) =>
         command.MessageId != Guid.Empty
         && command.Incident is { Length: >= 5 and <= 64 }
         && command.Incident.StartsWith("INC-", StringComparison.Ordinal)
-        && command.Incident.AsSpan(4).ContainsAnyExcept("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_") == false
+        && char.IsAsciiLetterOrDigit(command.Incident[4])
+        && !command.Incident.AsSpan(4).ContainsAnyExcept("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
         && command.CandidateSha is { Length: 40 }
         && command.CandidateSha.All(char.IsAsciiHexDigit)
         && command.CandidateSha.Any(character => character != '0')

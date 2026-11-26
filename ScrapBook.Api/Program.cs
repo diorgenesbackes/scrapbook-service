@@ -51,6 +51,10 @@ if (args is [EventStructuralLockRecoveryRunner.Argument, .. var recoveryArgument
     {
         return await EventStructuralLockRecoveryRunner.RunAsync(recoveryArguments, cancellation.Token);
     }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+        return 130;
+    }
     finally
     {
         Console.CancelKeyPress -= cancel;

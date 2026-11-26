@@ -86,7 +86,7 @@ public sealed class OutboxPublisherService(IOutboxRepository repository, IOutbox
         {
             message = null;
         }
-        var now = clock.GetUtcNow();
+        var now = FirstRecordConfirmedCodec.MicrosecondPrecision(clock.GetUtcNow());
         if (!await repository.MarkFailedAsync(messageId, lease, true, message is null ? InvalidFact : code, now, now, cancellationToken))
         {
             return OutboxPublishResult.LeaseLost;
