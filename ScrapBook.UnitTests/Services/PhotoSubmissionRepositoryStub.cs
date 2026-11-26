@@ -8,9 +8,12 @@ namespace ScrapBook.UnitTests.Services;
 internal sealed class PhotoSubmissionRepositoryStub(EventEntity item) : IPhotoSubmissionRepository
 {
     public PhotoSubmissionEntity? Submission { get; set; }
+    public IReadOnlyList<PhotoSubmissionEntity>? Files { get; set; }
     public CreatePhotoSubmissionCommand? Admitted { get; private set; }
     public HashSet<string> ReceivedVersions { get; } = [];
     public List<PhotoReceiptModel> Pinned { get; } = [];
+    public List<bool> Seals { get; } = [];
+    public IReadOnlyDictionary<long, string>? Problems { get; private set; }
     public (DateTimeOffset DueAt, string? Error)? Scheduled { get; private set; }
     public (string State, string Code)? Terminated { get; private set; }
     public bool ConfirmationAccepted { get; set; } = true;
@@ -28,14 +31,19 @@ internal sealed class PhotoSubmissionRepositoryStub(EventEntity item) : IPhotoSu
         return Task.CompletedTask;
     }
 
-    public Task<PhotoSubmissionEntity?> FindForRecordAsync(long recordId, CancellationToken cancellationToken) =>
-        Task.FromResult(Submission?.RecordId == recordId ? Submission : null);
+    private IReadOnlyList<PhotoSubmissionEntity> CurrentFiles => Files ?? (Submission is { } file ? [file] : []);
+
+    public Task<PhotoSubmissionEntity?> FindForRecordAsync(long recordId, Guid fileKey, CancellationToken cancellationToken) =>
+        Task.FromResult(CurrentFiles.SingleOrDefault(file => file.RecordId == recordId && file.FileKey == fileKey));
+
+    public Task<IReadOnlyList<PhotoSubmissionEntity>> FindFilesAsync(long recordId, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<PhotoSubmissionEntity>>(CurrentFiles.Where(file => file.RecordId == recordId).ToArray());
 
     public Task<PhotoSubmissionEntity?> FindForObjectAsync(string bucket, string key, CancellationToken cancellationToken) =>
-        Task.FromResult(Submission?.Bucket == bucket && Submission.TemporaryKey == key ? Submission : null);
+        Task.FromResult(CurrentFiles.SingleOrDefault(file => file.Bucket == bucket && file.TemporaryKey == key));
 
     public Task<PhotoSubmissionEntity?> FindWorkAsync(DateTimeOffset now, DateTime expiryBefore, CancellationToken cancellationToken) =>
-        Task.FromResult(Submission);
+        Task.FromResult(CurrentFiles.FirstOrDefault());
 
     public Task<bool> TryLeaseAsync(long sessionId, string state, Guid lease, DateTimeOffset now, DateTimeOffset leaseUntil,
         CancellationToken cancellationToken) => Task.FromResult(true);
@@ -53,9 +61,11 @@ internal sealed class PhotoSubmissionRepositoryStub(EventEntity item) : IPhotoSu
         return Task.CompletedTask;
     }
 
-    public Task PinAsync(PhotoSubmissionEntity submission, PhotoReceiptModel receipt, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task PinAsync(PhotoSubmissionEntity submission, PhotoReceiptModel receipt, DateTimeOffset now, bool seal,
+        CancellationToken cancellationToken)
     {
         Pinned.Add(receipt);
+        Seals.Add(seal);
         return Task.CompletedTask;
     }
 
@@ -68,10 +78,11 @@ internal sealed class PhotoSubmissionRepositoryStub(EventEntity item) : IPhotoSu
         return Task.FromResult(ConfirmationAccepted);
     }
 
-    public Task TerminateAsync(PhotoSubmissionEntity submission, Guid lease, string state, string code, DateTimeOffset now,
-        CancellationToken cancellationToken)
+    public Task TerminateAsync(PhotoSubmissionEntity submission, Guid lease, string state, string code,
+        IReadOnlyDictionary<long, string> problems, DateTimeOffset now, CancellationToken cancellationToken)
     {
         Terminated = (state, code);
+        Problems = problems;
         return Task.CompletedTask;
     }
 

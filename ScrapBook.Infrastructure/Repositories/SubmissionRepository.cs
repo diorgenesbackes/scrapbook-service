@@ -14,11 +14,27 @@ public sealed class SubmissionRepository(ScrapBookDbContext context) : ISubmissi
     public Task<IEventTransaction> BeginAsync(CancellationToken cancellationToken) =>
         ReadAsync<IEventTransaction>(async () => new EventTransaction(await context.Database.BeginTransactionAsync(cancellationToken)));
 
-    public async Task<EventEntity?> FindEventAsync(string code, bool forUpdate, CancellationToken cancellationToken)
+    public Task<EventEntity?> FindEventAsync(string code, bool forUpdate, CancellationToken cancellationToken)
     {
         FormattableString sql = forUpdate
             ? (FormattableString)$"SELECT event.* FROM scrapbook.events AS event WHERE event.code = {code} FOR UPDATE OF event"
             : $"SELECT event.* FROM scrapbook.events AS event WHERE event.code = {code}";
+        return ReadEventAsync(sql, cancellationToken);
+    }
+
+    public Task<EventEntity?> FindEventForShareAsync(string code, CancellationToken cancellationToken) =>
+        ReadEventAsync($"SELECT event.* FROM scrapbook.events AS event WHERE event.code = {code} FOR SHARE OF event",
+            cancellationToken);
+
+    public Task LockPhotoAttemptAsync(long eventId, Guid attemptKey, CancellationToken cancellationToken) =>
+        ReadAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
+            SELECT pg_advisory_xact_lock(hashtextextended(
+                'scrapbook.photo-submission-attempt:' || CAST({eventId} AS text) || ':' || CAST({attemptKey} AS text), 0
+            ))
+            """, cancellationToken));
+
+    private async Task<EventEntity?> ReadEventAsync(FormattableString sql, CancellationToken cancellationToken)
+    {
         var rows = await ReadAsync(() => context.Set<EventEntity>().FromSqlInterpolated(sql).AsNoTracking()
             .ToListAsync(cancellationToken));
         return rows.SingleOrDefault();
@@ -40,8 +56,25 @@ public sealed class SubmissionRepository(ScrapBookDbContext context) : ISubmissi
         CancellationToken cancellationToken)
     {
         var rows = await ReadAsync(() => context.Database.SqlQuery<SubmissionAttemptEntity>($"""
-            SELECT record.id AS "RecordId", record.format AS "Format", operation.result_code AS "ResultCode",
-                session.completion_deadline_at AS "CompletionDeadlineAt",
+            SELECT record.id AS "RecordId", record.format AS "Format", record.category AS "Category",
+                operation.result_code AS "ResultCode", session.completion_deadline_at AS "CompletionDeadlineAt",
+                ARRAY(
+                    SELECT file.position::integer FROM scrapbook.files AS file
+                    JOIN scrapbook.storage_objects AS temporary
+                        ON temporary.storage_objects_files_id = file.id AND temporary.kind = 'temporary'
+                    WHERE file.files_records_id = record.id AND temporary.version_id IS NULL
+                    ORDER BY file.position
+                ) AS "PendingPositions",
+                ARRAY(
+                    SELECT file.position::integer FROM scrapbook.files AS file
+                    WHERE file.files_records_id = record.id AND file.error_code IS NOT NULL
+                    ORDER BY file.position
+                ) AS "ProblemPositions",
+                ARRAY(
+                    SELECT file.error_code::text FROM scrapbook.files AS file
+                    WHERE file.files_records_id = record.id AND file.error_code IS NOT NULL
+                    ORDER BY file.position
+                ) AS "ProblemCodes",
                 CASE WHEN operation.state = 'in_progress' THEN session.state ELSE operation.state END AS "State",
                 record.confirmed_at AS "ConfirmedAt",
                 operation.hash_key_id AS "HashKeyId", operation.payload_hash AS "PayloadHash",
