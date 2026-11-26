@@ -19,6 +19,8 @@ public interface IPhotoSubmissionRepository
     Task PinAsync(PhotoSubmissionEntity submission, PhotoReceiptModel receipt, DateTimeOffset now, bool seal,
         CancellationToken cancellationToken);
     Task<bool> HasReceiptAsync(long storageObjectId, string versionId, CancellationToken cancellationToken);
+    Task<DateTimeOffset?> FindReceiptAtAsync(long storageObjectId, string versionId, string eventKind,
+        CancellationToken cancellationToken);
     Task<bool> ConfirmAsync(ConfirmPhotoSubmissionCommand command, CancellationToken cancellationToken);
     Task TerminateAsync(PhotoSubmissionEntity submission, Guid lease, string state, string code,
         IReadOnlyDictionary<long, string> problems, DateTimeOffset now, CancellationToken cancellationToken);

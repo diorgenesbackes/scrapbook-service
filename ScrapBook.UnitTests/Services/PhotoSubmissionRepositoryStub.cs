@@ -74,6 +74,11 @@ internal sealed class PhotoSubmissionRepositoryStub(EventEntity item) : IPhotoSu
     public Task<bool> HasReceiptAsync(long storageObjectId, string versionId, CancellationToken cancellationToken) =>
         Task.FromResult(Received.ContainsKey((storageObjectId, versionId)));
 
+    public Task<DateTimeOffset?> FindReceiptAtAsync(long storageObjectId, string versionId, string eventKind,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(Received.TryGetValue((storageObjectId, versionId), out var receipt) && receipt.EventKind == eventKind
+            ? (DateTimeOffset?)receipt.ReceivedAt : null);
+
     public Task<bool> ConfirmAsync(ConfirmPhotoSubmissionCommand command, CancellationToken cancellationToken)
     {
         if (ConfirmationAccepted) Confirmations.Add(command);
