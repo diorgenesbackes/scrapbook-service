@@ -27,7 +27,8 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
             Type = "about:blank",
             Title = title,
             Status = status,
-            Detail = status >= 500 ? "Ocorreu uma falha temporária." : title
+            Detail = status >= 500 && exception is not PhotoSubmissionDisabledException
+                ? "Ocorreu uma falha temporária." : title
         };
         if (exception is EventRequestValidationException validation)
         {
@@ -68,6 +69,8 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
         SubmissionAttemptNotFoundException => (404, "RESOURCE_NOT_FOUND", "Envio indisponível."),
         SubmissionWindowException window => (409, "UPLOAD_WINDOW_CLOSED", window.WindowState == "before"
             ? "Novos envios ainda não estão disponíveis." : "O prazo para novos envios terminou."),
+        PhotoSubmissionDisabledException => (503, "PHOTO_SUBMISSION_DISABLED", "O envio de fotos está indisponível."),
+        PhotoUploadUnavailableException => (409, "UPLOAD_NOT_AVAILABLE", "O envio da foto está indisponível nesta tentativa."),
         SubmissionConsentRequiredException => (409, "SUBMISSION_CONSENT_REQUIRED", "Confirme o aviso para continuar."),
         SubmissionDeadlineExceededException => (409, "UPLOAD_COMPLETION_DEADLINE_EXCEEDED", "O prazo para concluir este envio terminou."),
         InvitationUnavailableException => (409, "INVITATION_UNAVAILABLE", "Este convite não está mais disponível. Solicite um novo."),
@@ -77,7 +80,7 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
         InvitationAccountAlreadyLinkedException => (409, "INVITATION_ACCOUNT_ALREADY_LINKED", "Você já é responsável por este evento."),
         BadHttpRequestException { StatusCode: 413 } => (413, "REQUEST_TOO_LARGE", "Tamanho da solicitação excedido."),
         EventJsonMediaTypeException => (415, "UNSUPPORTED_MEDIA_TYPE", "Use application/json."),
-        PostgresUnavailableException or PublicEventTimeoutException or InvitationProtectionUnavailableException or SubmissionUnavailableException =>
+        PostgresUnavailableException or PublicEventTimeoutException or InvitationProtectionUnavailableException or SubmissionUnavailableException or PhotoStorageUnavailableException =>
             (503, "DEPENDENCY_UNAVAILABLE", "Dependência indisponível"),
         _ => (500, "UNEXPECTED_ERROR", "Falha interna")
     };
