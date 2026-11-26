@@ -15,7 +15,8 @@ public sealed class ScrapBookJsonConsoleFormatter(IHostEnvironment environment) 
     private static readonly HashSet<string> StructuredFields =
     [
         "operation", "requestId", "httpMethod", "route", "statusCode", "durationMs", "outcome",
-        "traceId", "spanId", "correlationId", "readinessReason", "errorCode"
+        "traceId", "spanId", "correlationId", "readinessReason", "errorCode", "stage", "pendingCount",
+        "failedCount", "oldestPendingAgeSeconds"
     ];
 
     public override void Write<TState>(in LogEntry<TState> logEntry, IExternalScopeProvider? scopeProvider, TextWriter textWriter)

@@ -3,13 +3,16 @@ using ScrapBook.Domain.Entities;
 using ScrapBook.Domain.Exceptions;
 using ScrapBook.Domain.Interfaces;
 using ScrapBook.Domain.Models;
+using static ScrapBook.Application.Services.EventStructuralLockFactService;
 
 namespace ScrapBook.Application.Services;
 
-public sealed class OutboxPublisherService(IOutboxRepository repository, IOutboxPublisher publisher, TimeProvider clock)
+public sealed class OutboxPublisherService(IOutboxRepository repository, IOutboxPublisher publisher,
+    IEventStructuralLockRepository locks, TimeProvider clock)
 {
     private const int MaximumAttempts = 5;
     private const int BatchSize = 4;
+    private const string InvalidFact = "PUBLISH_INVALID_FACT";
     private static readonly TimeSpan Lease = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan PublishTimeout = TimeSpan.FromSeconds(8);
 
@@ -25,12 +28,13 @@ public sealed class OutboxPublisherService(IOutboxRepository repository, IOutbox
         if (row.LeaseToken is not { } lease) return OutboxPublishResult.LeaseLost;
         if (row.AttemptCount > MaximumAttempts)
         {
-            return await RegisterFailureAsync(row, lease, false, "PUBLISH_ATTEMPTS_EXHAUSTED", cancellationToken);
+            return await RegisterTerminalAsync(row.MessageId, lease, "PUBLISH_ATTEMPTS_EXHAUSTED", cancellationToken);
         }
-        if (row is not { Type: FirstRecordConfirmedModel.Type, ProtocolVersion: FirstRecordConfirmedModel.Version, AggregateType: "event" }
-            || FirstRecordConfirmedCodec.ReadOutbox(row) is not { } message)
+        if (ReadOriginal(row) is not { } message || !await HasConfirmedRecordAsync(locks, message, cancellationToken))
         {
-            return await RegisterFailureAsync(row, lease, false, "PUBLISH_INVALID_FACT", cancellationToken);
+            var now = clock.GetUtcNow();
+            return await repository.MarkFailedAsync(row.MessageId, lease, true, InvalidFact, now, now, cancellationToken)
+                ? OutboxPublishResult.InvalidFact : OutboxPublishResult.LeaseLost;
         }
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -55,13 +59,43 @@ public sealed class OutboxPublisherService(IOutboxRepository repository, IOutbox
     private async Task<OutboxPublishResult> RegisterFailureAsync(OutboxMessageEntity row, Guid lease, bool retryable,
         string code, CancellationToken cancellationToken)
     {
-        var terminal = !retryable || row.AttemptCount >= MaximumAttempts;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!retryable || row.AttemptCount >= MaximumAttempts)
+        {
+            return await RegisterTerminalAsync(row.MessageId, lease, code, cancellationToken);
+        }
+
         var now = clock.GetUtcNow();
-        var availableAt = terminal ? now : now.AddSeconds(Math.Min(30, Math.Pow(2, row.AttemptCount)));
-        if (!await repository.MarkFailedAsync(row.MessageId, lease, terminal, code, now, availableAt, cancellationToken))
+        var availableAt = now.AddSeconds(Math.Min(30, Math.Pow(2, row.AttemptCount)));
+        return await repository.MarkFailedAsync(row.MessageId, lease, false, code, now, availableAt, cancellationToken)
+            ? OutboxPublishResult.RetryScheduled : OutboxPublishResult.LeaseLost;
+    }
+
+    private async Task<OutboxPublishResult> RegisterTerminalAsync(Guid messageId, Guid lease, string code,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await repository.BeginAsync(cancellationToken);
+        var current = await repository.FindForUpdateAsync(messageId, cancellationToken);
+        if (current is not { State: "publishing" } || current.LeaseToken != lease)
         {
             return OutboxPublishResult.LeaseLost;
         }
-        return terminal ? OutboxPublishResult.Failed : OutboxPublishResult.RetryScheduled;
+
+        var message = ReadOriginal(current);
+        if (message is not null && !await HasConfirmedRecordAsync(locks, message, cancellationToken))
+        {
+            message = null;
+        }
+        var now = clock.GetUtcNow();
+        if (!await repository.MarkFailedAsync(messageId, lease, true, message is null ? InvalidFact : code, now, now, cancellationToken))
+        {
+            return OutboxPublishResult.LeaseLost;
+        }
+        if (message is not null)
+        {
+            await repository.InsertResultAsync(StructuralLockOutcomeService.Failed(message, now, "publish", code), cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+        return message is null ? OutboxPublishResult.InvalidFact : OutboxPublishResult.Failed;
     }
 }

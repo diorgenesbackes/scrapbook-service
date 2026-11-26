@@ -1,3 +1,4 @@
+using ScrapBook.Application.Diagnostics;
 using ScrapBook.Application.Services;
 using ScrapBook.Domain.Entities;
 using ScrapBook.Domain.Exceptions;
@@ -21,9 +22,9 @@ public sealed class OutboxPublisherWorker(IServiceScopeFactory scopes, ILogger<O
                 }
                 await Task.WhenAll(batch.Select(item => PublishAsync(item, stoppingToken)));
             }
-            catch (PostgresUnavailableException)
+            catch (Exception error) when (error is PostgresUnavailableException or PostgresWriteRejectedException)
             {
-                logger.LogWarning("Outbox database unavailable. {ErrorCode}", "OUTBOX_POSTGRES_UNAVAILABLE");
+                logger.LogWarning("Outbox database operation requires reconciliation. {ErrorCode}", "OUTBOX_DATABASE_RETRY");
                 await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
             }
         }
@@ -39,13 +40,19 @@ public sealed class OutboxPublisherWorker(IServiceScopeFactory scopes, ILogger<O
     {
         await using var scope = scopes.CreateAsyncScope();
         var result = await scope.ServiceProvider.GetRequiredService<OutboxPublisherService>().PublishAsync(item, cancellationToken);
+        EventStructuralLockTelemetry.RecordPublication(result.ToString());
         if (result == OutboxPublishResult.Failed)
         {
-            logger.LogError("Outbox message is pending recovery. {ErrorCode} {CorrelationId}", "OUTBOX_PUBLISH_FAILED", item.CorrelationId);
+            logger.LogError(new EventId(4200, "event.structural_lock.failed"),
+                "Structural lock publication requires recovery. {Stage} {ErrorCode}", "publish", "OUTBOX_PUBLISH_TERMINAL");
+        }
+        else if (result == OutboxPublishResult.InvalidFact)
+        {
+            logger.LogWarning("Outbox first confirmation has no verified origin. {ErrorCode}", "PUBLISH_INVALID_FACT");
         }
         else if (result is OutboxPublishResult.RetryScheduled or OutboxPublishResult.LeaseLost)
         {
-            logger.LogWarning("Outbox publication will be reconciled. {Outcome} {CorrelationId}", result, item.CorrelationId);
+            logger.LogWarning("Outbox publication will be reconciled. {Outcome}", result);
         }
     }
 }
