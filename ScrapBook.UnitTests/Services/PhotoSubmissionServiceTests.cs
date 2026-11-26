@@ -52,13 +52,14 @@ public sealed class PhotoSubmissionServiceTests
         Assert.Equal(Deadline, result.Status.CompletionDeadlineAt);
         var admitted = Assert.IsType<CreatePhotoSubmissionCommand>(photos.Admitted);
         Assert.Equal(caption, admitted.Caption);
-        Assert.Equal(fileKey, admitted.File.FileKey);
-        Assert.Equal(mediaType, admitted.File.DeclaredMediaType);
-        Assert.Equal(20_000_000, admitted.File.SizeBytes);
-        Assert.Equal(Hash, admitted.File.Sha256);
+        var intent = Assert.Single(admitted.Files);
+        Assert.Equal(fileKey, intent.Manifest.FileKey);
+        Assert.Equal(mediaType, intent.Manifest.DeclaredMediaType);
+        Assert.Equal(20_000_000, intent.Manifest.SizeBytes);
+        Assert.Equal(Hash, intent.Manifest.Sha256);
         Assert.Equal(Bucket, admitted.Bucket);
-        Assert.StartsWith("submissions/temporary/", admitted.TemporaryKey);
-        Assert.StartsWith("submissions/original/", admitted.OriginalKey);
+        Assert.StartsWith("submissions/temporary/", intent.TemporaryKey);
+        Assert.StartsWith("submissions/original/", intent.OriginalKey);
         Assert.True(submissions.Transaction.Committed);
         Assert.Empty(storage.Authorizations);
         Assert.Null(submissions.Outbox);
@@ -247,8 +248,9 @@ public sealed class PhotoSubmissionServiceTests
         var sourceRead = (Temporary, Version);
         Assert.Equal([sourceRead, originalRead, sourceRead, originalRead], storage.Reads);
         var confirmation = Assert.Single(photos.Confirmations);
-        Assert.Equal(Version, confirmation.Original.SourceVersion);
-        Assert.Equal("original-version", confirmation.Original.VersionId);
+        var confirmedFile = Assert.Single(confirmation.Files);
+        Assert.Equal(Version, confirmedFile.Original.SourceVersion);
+        Assert.Equal("original-version", confirmedFile.Original.VersionId);
         Assert.Equal(new DateTime(2032, 3, 1, 13, 0, 0), confirmation.ReceivedAt);
         Assert.Equal(clock.Now, confirmation.CommittedAt);
         Assert.Equal(
@@ -319,6 +321,7 @@ public sealed class PhotoSubmissionServiceTests
         EventId = submissions.Event.Id,
         RecordId = 19,
         FileId = 9,
+        Position = 1,
         TemporaryObjectId = 11,
         OriginalObjectId = 12,
         State = receipt is null ? "receiving" : "validating",
