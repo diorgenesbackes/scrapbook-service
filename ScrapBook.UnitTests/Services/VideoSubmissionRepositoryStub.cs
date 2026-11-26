@@ -24,11 +24,18 @@ internal sealed class VideoSubmissionRepositoryStub(PhotoSubmissionRepositoryStu
         return Task.FromResult(true);
     }
 
-    public Task<PhotoSubmissionEntity?> FindMultipartCleanupAsync(DateTimeOffset terminalBefore,
-        CancellationToken cancellationToken) => Task.FromResult<PhotoSubmissionEntity?>(null);
+    public Task<PhotoSubmissionEntity?> FindMultipartCleanupAsync(DateTimeOffset now, DateTimeOffset terminalBefore,
+        string[] terminalStates, string deadlineOnlyState, CancellationToken cancellationToken) =>
+        Task.FromResult<PhotoSubmissionEntity?>(null);
 
-    public Task MarkMultipartAbortedAsync(long objectId, DateTimeOffset eligibleAt, DateTimeOffset completedAt,
+    public Task<bool> TryClaimMultipartCleanupAsync(long objectId, DateTimeOffset eligibleAt, DateTimeOffset now,
+        Guid lease, DateTimeOffset leaseUntil, CancellationToken cancellationToken) => Task.FromResult(false);
+
+    public Task MarkMultipartAbortedAsync(long objectId, Guid lease, DateTimeOffset completedAt,
         CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task ScheduleMultipartCleanupAsync(long objectId, Guid lease, DateTimeOffset now, DateTimeOffset nextAttemptAt,
+        string errorCode, CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task<DateTimeOffset?> FindReceiptAtAsync(long objectId, string versionId, string eventKind,
         CancellationToken cancellationToken) => Task.FromResult(
