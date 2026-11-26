@@ -17,6 +17,11 @@ public sealed class EventTransaction(IDbContextTransaction transaction) : IEvent
         {
             throw new PostgresUnavailableException(error);
         }
+        catch (PostgresException error) when (error.SqlState.StartsWith("23", StringComparison.Ordinal)
+            || error.SqlState == PostgresErrorCodes.RaiseException)
+        {
+            throw new PostgresWriteRejectedException(error);
+        }
     }
 
     public ValueTask DisposeAsync() => transaction.DisposeAsync();

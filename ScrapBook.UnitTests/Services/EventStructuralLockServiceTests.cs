@@ -1,19 +1,17 @@
+using System.Diagnostics.Metrics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ScrapBook.Application.Services;
 using ScrapBook.Domain.Commands;
 using ScrapBook.Domain.Entities;
+using ScrapBook.Domain.Exceptions;
 using ScrapBook.Domain.Models;
+using static ScrapBook.UnitTests.Services.EventStructuralLockTestFixture;
 
 namespace ScrapBook.UnitTests.Services;
 
 public sealed class EventStructuralLockServiceTests
 {
-    private const string FirstConfirmationType = "event.first-record-confirmed.v1";
-    private static readonly Guid MessageId = Guid.Parse("3b0da52a-12ea-1258-ec0b-73e8530e90cf");
-    private static readonly Guid CorrelationId = Guid.Parse("da771942-1b5b-4c4b-885a-62260ad1fc65");
-    private static readonly DateTimeOffset ConfirmedAt = DateTimeOffset.Parse("2031-01-01T00:00:00.120Z");
-    private static readonly DateTime ConfirmedInBrasilia = new(2030, 12, 31, 21, 0, 0, 120);
     private readonly EventTestTimeProvider clock = new() { Now = ConfirmedAt.AddSeconds(3) };
     private readonly EventWriteTestRepository events = new() { Item = Event() };
     private readonly InvitationTestRepository invitations = new();
@@ -33,6 +31,9 @@ public sealed class EventStructuralLockServiceTests
             Assert.Single(locks.Applications);
             Assert.Same(pending, Assert.Single(invitations.Closed));
             Assert.NotNull(events.Audit);
+            var (outcome, token) = Assert.Single(outbox.Results);
+            Assert.Equal(cancellation.Token, token);
+            StructuralLockOutboxAssertions.Applied(outcome, Origin(), clock.Now);
         };
 
         Assert.Equal(EventStructuralLockResult.Applied, await Service.ConsumeAsync(Envelope(), cancellation.Token));
@@ -61,6 +62,7 @@ public sealed class EventStructuralLockServiceTests
         Assert.True(Assert.Single(after.RootElement.EnumerateObject()).Value.GetBoolean());
         Assert.True(events.Transaction.Committed);
         Assert.True(events.Transaction.Disposed);
+        Assert.Equal(cancellation.Token, events.Transaction.CommitToken);
     }
 
     [Fact]
@@ -74,6 +76,7 @@ public sealed class EventStructuralLockServiceTests
 
         Assert.Equal(MessageId, Assert.Single(locks.Claims).CorrelationId);
         Assert.Equal(MessageId, Assert.IsType<AuditEntryEntity>(events.Audit).CorrelationId);
+        StructuralLockOutboxAssertions.Applied(Assert.Single(outbox.Results).Message, outbox.Origin, clock.Now);
     }
 
     [Theory]
@@ -135,6 +138,7 @@ public sealed class EventStructuralLockServiceTests
         Assert.Single(locks.Completions);
         Assert.Single(invitations.Closed);
         Assert.Same(audit, events.Audit);
+        Assert.Single(outbox.Results);
     }
 
     [Theory]
@@ -155,6 +159,7 @@ public sealed class EventStructuralLockServiceTests
         Assert.Equal(7, events.Item.Version);
         Assert.Empty(locks.Applications);
         Assert.Empty(invitations.Closed);
+        Assert.Empty(outbox.Results);
         Assert.Null(events.Audit);
         Assert.Equal(complete, events.Transaction.Committed);
         Assert.Equal(complete ? 1 : 0, locks.Completions.Count);
@@ -183,6 +188,8 @@ public sealed class EventStructuralLockServiceTests
         };
 
         Assert.Equal(EventStructuralLockResult.Rejected, await Service.ConsumeAsync(Envelope(), CancellationToken.None));
+        Assert.Equal(EventStructuralLockResult.Rejected,
+            await Service.RecordTerminalDeliveryAsync(Envelope(), CancellationToken.None));
 
         Assert.Empty(locks.Claims);
         AssertNoEffects();
@@ -199,6 +206,8 @@ public sealed class EventStructuralLockServiceTests
         body[field] = value;
 
         Assert.Equal(EventStructuralLockResult.Rejected, await Service.ConsumeAsync(body.ToJsonString(), CancellationToken.None));
+        Assert.Equal(EventStructuralLockResult.Rejected,
+            await Service.RecordTerminalDeliveryAsync(body.ToJsonString(), CancellationToken.None));
 
         AssertNoEffects();
     }
@@ -215,6 +224,23 @@ public sealed class EventStructuralLockServiceTests
         Assert.Equal((42L, 237L, CancellationToken.None), Assert.Single(locks.RecordLookups));
         AssertNoEffects();
         Assert.True(events.Transaction.Disposed);
+        Assert.Equal(EventStructuralLockResult.Rejected,
+            await Service.RecordTerminalDeliveryAsync(Envelope(), CancellationToken.None));
+        AssertNoEffects();
+    }
+
+    [Fact]
+    public async Task RejectsAnUnknownDeliveryVersionBeforeRecordingAFailureAsync()
+    {
+        var body = JsonNode.Parse(Envelope())!.AsObject();
+        body["version"] = 2;
+
+        Assert.Equal(EventStructuralLockResult.Rejected,
+            await Service.RecordTerminalDeliveryAsync(body.ToJsonString(), CancellationToken.None));
+
+        Assert.Empty(locks.Claims);
+        Assert.Empty(locks.RecordLookups);
+        AssertNoEffects();
     }
 
     [Fact]
@@ -243,6 +269,7 @@ public sealed class EventStructuralLockServiceTests
         Assert.Single(locks.Applications);
         Assert.Single(invitations.Closed);
         Assert.Empty(locks.Completions);
+        Assert.Empty(outbox.Results);
         Assert.False(events.Transaction.Committed);
         Assert.True(events.Transaction.Disposed);
     }
@@ -259,50 +286,143 @@ public sealed class EventStructuralLockServiceTests
         AssertNoEffects();
     }
 
+    [Theory]
+    [InlineData(-10, EventStructuralLockResult.Applied)]
+    [InlineData(0, EventStructuralLockResult.Applied)]
+    [InlineData(10, EventStructuralLockResult.Rejected)]
+    public async Task UsesTheOriginalConfirmationForTheInclusiveOrdinaryReplayHorizonAsync(
+        long ticksFromDeadline, EventStructuralLockResult expected)
+    {
+        clock.Now = ConfirmedAt.AddDays(30).AddTicks(ticksFromDeadline);
+
+        Assert.Equal(expected, await Service.ConsumeAsync(Envelope(), CancellationToken.None));
+
+        if (expected == EventStructuralLockResult.Applied)
+        {
+            StructuralLockOutboxAssertions.Applied(Assert.Single(outbox.Results).Message, Origin(), clock.Now);
+            Assert.True(events.Transaction.Committed);
+        }
+        else
+        {
+            AssertNoEffects();
+        }
+    }
+
+    [Fact]
+    public async Task AcknowledgesAnAlreadyCompletedFactAfterTheOrdinaryReplayHorizonAsync()
+    {
+        Assert.Equal(EventStructuralLockResult.Applied, await Service.ConsumeAsync(Envelope(), CancellationToken.None));
+        clock.Now = ConfirmedAt.AddDays(38);
+
+        Assert.Equal(EventStructuralLockResult.Duplicate, await Service.ConsumeAsync(Envelope(), CancellationToken.None));
+
+        Assert.Single(locks.Applications);
+        Assert.Single(locks.Completions);
+        Assert.Single(outbox.Results);
+    }
+
+    [Fact]
+    public async Task MeasuresTheTimeFromConfirmationToDurableLockWithoutIdentifiersAsync()
+    {
+        var testContext = new AsyncLocal<bool> { Value = true };
+        var measurements = new List<(double Seconds, int Dimensions)>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, meterListener) =>
+        {
+            if (instrument.Meter.Name == "ScrapBook.EventStructuralLock"
+                && instrument.Name == "scrapbook.event.structural_lock.duration")
+            {
+                meterListener.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<double>((_, seconds, tags, _) =>
+        {
+            if (testContext.Value) measurements.Add((seconds, tags.Length));
+        });
+        listener.Start();
+        events.BeforeCommitAsync = _ =>
+        {
+            Assert.Empty(measurements);
+            clock.Now = clock.Now.AddMilliseconds(1500);
+            return Task.CompletedTask;
+        };
+
+        Assert.Equal(EventStructuralLockResult.Applied, await Service.ConsumeAsync(Envelope(), CancellationToken.None));
+
+        Assert.Equal((4.5, 0), Assert.Single(measurements));
+    }
+
+    [Fact]
+    public async Task RecordsOneRecoverableTerminalOutcomeForAConfirmedFactAsync()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var failedAt = clock.Now;
+
+        Assert.Equal(EventStructuralLockResult.Terminal,
+            await Service.RecordTerminalDeliveryAsync(Envelope(), cancellation.Token));
+        Assert.True(events.Transaction.Committed);
+        Assert.True(events.Transaction.Disposed);
+        clock.Now = clock.Now.AddSeconds(10);
+        await Service.RecordTerminalDeliveryAsync(Envelope(), cancellation.Token);
+
+        var quarantine = Assert.Single(locks.Quarantines);
+        Assert.Equal((73L, failedAt, cancellation.Token), (quarantine.Id, quarantine.Time, quarantine.Token));
+        Assert.Equal("CONSUME_ATTEMPTS_EXHAUSTED", quarantine.ErrorCode);
+        var (outcome, token) = Assert.Single(outbox.Results);
+        Assert.Equal(cancellation.Token, token);
+        StructuralLockOutboxAssertions.Failed(outcome, Origin(), failedAt, "consume", quarantine.ErrorCode);
+        Assert.Equal(EventStructuralLockResult.Rejected, await Service.ConsumeAsync(Envelope(), cancellation.Token));
+        Assert.Empty(locks.Applications);
+        Assert.Empty(locks.Completions);
+        Assert.Empty(invitations.Closed);
+        Assert.Null(events.Audit);
+    }
+
+    [Fact]
+    public async Task LeavesTheLockUncommittedWhenTheAppliedOutcomeCannotBeStoredAsync()
+    {
+        invitations.Items.Add(Invitation("pending"));
+        outbox.BeforeResult = (_, _) => throw new PostgresUnavailableException();
+
+        await Assert.ThrowsAsync<PostgresUnavailableException>(() => Service.ConsumeAsync(Envelope(), CancellationToken.None));
+
+        Assert.Single(locks.Applications);
+        Assert.Single(invitations.Closed);
+        Assert.NotNull(events.Audit);
+        Assert.Empty(locks.Completions);
+        Assert.Empty(outbox.Results);
+        Assert.False(events.Transaction.Committed);
+        Assert.True(events.Transaction.Disposed);
+    }
+
+    [Fact]
+    public async Task DisposesUncommittedWorkWhenCancellationArrivesDuringTheAppliedOutcomeWriteAsync()
+    {
+        using var cancellation = new CancellationTokenSource();
+        outbox.BeforeResult = (_, token) =>
+        {
+            Assert.Equal(cancellation.Token, token);
+            cancellation.Cancel();
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Service.ConsumeAsync(Envelope(), cancellation.Token));
+
+        Assert.False(events.Transaction.Committed);
+        Assert.True(events.Transaction.Disposed);
+        Assert.Empty(locks.Completions);
+        Assert.Empty(outbox.Results);
+    }
+
     private void AssertNoEffects()
     {
         Assert.Empty(locks.Applications);
         Assert.Empty(locks.Completions);
         Assert.Empty(invitations.Closed);
+        Assert.Empty(locks.Quarantines);
+        Assert.Empty(outbox.Results);
         Assert.Null(events.Audit);
         Assert.False(events.Transaction.Committed);
     }
-
-    private static string Envelope(string recordId = "237") => JsonSerializer.Serialize(new
-    {
-        messageId = MessageId,
-        type = FirstConfirmationType,
-        version = 1,
-        eventId = "42",
-        occurredAt = "2031-01-01T00:00:00.120Z",
-        correlationId = CorrelationId,
-        data = new { recordId, confirmedAt = "2031-01-01T00:00:00.120Z" }
-    });
-
-    private static OutboxMessageEntity Origin() => new(MessageId, FirstConfirmationType, 1, "event", 42,
-        OriginPayload("237", ConfirmedAt), CorrelationId, ConfirmedAt, 1, null);
-
-    private static string OriginPayload(string recordId, DateTimeOffset confirmedAt) =>
-        JsonSerializer.Serialize(new { eventId = "42", recordId, confirmedAt });
-
-    private static EventEntity Event(DateTime? lockedAt = null, long? firstRecordId = null) => new()
-    {
-        Id = 42,
-        Version = 7,
-        Code = new string('A', 43),
-        Name = "Evento sintético",
-        StartsAt = new DateTime(2031, 1, 1, 18, 30, 0),
-        SubmissionOpensAt = new DateTime(2031, 1, 1, 16, 30, 0),
-        SubmissionClosesAt = new DateTime(2031, 1, 2, 12, 0, 0),
-        CompletionDeadlineAt = new DateTime(2031, 1, 2, 13, 0, 0),
-        OpeningMode = "scheduled",
-        AccessState = "flexible",
-        AccessVersion = 13,
-        OpensAt = new DateTime(2031, 1, 9),
-        LockedAt = lockedAt,
-        FirstRecordId = firstRecordId,
-        FirstRecordConfirmedAt = lockedAt.HasValue ? ConfirmedInBrasilia : null
-    };
 
     private static InvitationEntity Invitation(string state) => new()
     {
