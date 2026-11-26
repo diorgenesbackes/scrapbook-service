@@ -10,7 +10,7 @@ using ScrapBook.Infrastructure.Persistence;
 
 namespace ScrapBook.Infrastructure.Repositories;
 
-public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPhotoSubmissionRepository
+public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPhotoSubmissionRepository, IVideoSubmissionRepository
 {
     private const string SelectSubmission = """
         SELECT session.id AS "SessionId", record.records_events_id AS "EventId", record.id AS "RecordId",
@@ -19,6 +19,8 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
             session.state AS "State", temporary.bucket AS "Bucket",
             temporary.object_key AS "TemporaryKey", original.object_key AS "OriginalKey",
             temporary.version_id AS "TemporaryVersion", temporary.receipt_event_at AS "ReceiptAt",
+            temporary.multipart_id AS "MultipartId", file.multipart_checksums AS "PartSha256",
+            record.format AS "Format", record.category AS "Category",
             file.client_key AS "FileKey", file.declared_type AS "DeclaredMediaType",
             file.declared_size AS "DeclaredSize", file.sha256 AS "Sha256",
             session.started_at AS "StartedAt", session.completion_deadline_at AS "CompletionDeadlineAt",
@@ -47,6 +49,11 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
         {
             Value = files.Select(file => file.Manifest.Sha256).ToArray()
         };
+        var partHashes = new NpgsqlParameter("part_hashes", NpgsqlDbType.Array | NpgsqlDbType.Bytea)
+        {
+            Value = (object?)files.SingleOrDefault(file => file.Manifest.PartSha256 is not null)?.Manifest.PartSha256
+                ?? DBNull.Value
+        };
         return ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
             WITH file_intents AS (
                 SELECT position, client_key, declared_type, declared_size, sha256, temporary_key, original_key
@@ -61,7 +68,7 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
                     records_events_id, records_consent_notices_id, category, format, sender_name, caption,
                     expected_file_count, consented_at, submitted_at, state
                 ) VALUES (
-                    {command.Event.Id}, {command.NoticeId}, {command.Category}, 'photo', {command.GuestName}, {command.Caption},
+                    {command.Event.Id}, {command.NoticeId}, {command.Category}, {command.Format}, {command.GuestName}, {command.Caption},
                     {files.Count}, {Civil("consented_at", command.ConsentedAt)}, {Civil("submitted_at", command.SubmittedAt)},
                     'receiving'
                 ) RETURNING id
@@ -88,10 +95,10 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
             ), inserted_files AS (
                 INSERT INTO scrapbook.files (
                     files_records_id, position, client_key, kind, declared_type, declared_size, sha256,
-                    validation_state, processing_state
+                    multipart_checksums, validation_state, processing_state
                 )
-                SELECT session.upload_sessions_records_id, intent.position, intent.client_key, 'photo',
-                    intent.declared_type, intent.declared_size, intent.sha256, 'expected', 'not_requested'
+                SELECT session.upload_sessions_records_id, intent.position, intent.client_key, {command.Format},
+                    intent.declared_type, intent.declared_size, intent.sha256, {partHashes}, 'expected', 'not_requested'
                 FROM inserted_session AS session
                 CROSS JOIN file_intents AS intent
                 ORDER BY intent.position
@@ -103,6 +110,39 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
             JOIN file_intents AS intent ON intent.position = file.position
             CROSS JOIN LATERAL (VALUES ('temporary', intent.temporary_key), ('original', intent.original_key)) AS object(kind, key)
             """, cancellationToken));
+    }
+
+    public async Task<long?> TryBeginMultipartAsync(long objectId, long sessionId, DateTimeOffset now, DateTimeOffset retryBefore,
+        CancellationToken cancellationToken)
+    {
+        var versions = await ExecuteAsync(() => context.Database.SqlQuery<long>($"""
+            UPDATE scrapbook.storage_objects AS object
+            SET state = 'initializing', observed_at = {now}, version = object.version + 1
+            FROM scrapbook.files AS file, scrapbook.upload_sessions AS session
+            WHERE object.id = {objectId} AND object.kind = 'temporary' AND object.multipart_id IS NULL
+                AND object.version_id IS NULL AND (object.state = 'planned'
+                    OR (object.state = 'initializing' AND object.observed_at <= {retryBefore}))
+                AND file.id = object.storage_objects_files_id AND session.id = {sessionId}
+                AND session.upload_sessions_records_id = file.files_records_id AND session.state = 'receiving'
+                AND session.completion_deadline_at > ({now} AT TIME ZONE 'America/Sao_Paulo')
+            RETURNING object.version AS "Value"
+            """).ToListAsync(cancellationToken));
+        return versions.Count == 0 ? null : versions.Single();
+    }
+
+    public async Task<bool> TrySetMultipartIdAsync(long objectId, long sessionId, long claimVersion, string multipartId,
+        CancellationToken cancellationToken)
+    {
+        var count = await ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE scrapbook.storage_objects AS object
+            SET multipart_id = {multipartId}, state = 'uploading', version = object.version + 1
+            FROM scrapbook.files AS file, scrapbook.upload_sessions AS session
+            WHERE object.id = {objectId} AND object.kind = 'temporary' AND object.multipart_id IS NULL
+                AND object.version_id IS NULL AND object.state = 'initializing' AND object.version = {claimVersion}
+                AND file.id = object.storage_objects_files_id AND session.id = {sessionId}
+                AND session.upload_sessions_records_id = file.files_records_id AND session.state = 'receiving'
+            """, cancellationToken));
+        return count == 1;
     }
 
     public Task<PhotoSubmissionEntity?> FindForRecordAsync(long recordId, Guid fileKey, CancellationToken cancellationToken) =>
@@ -156,8 +196,8 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
     public Task StoreReceiptAsync(long storageObjectId, PhotoReceiptModel receipt, DateTimeOffset cleanupAfter,
         CancellationToken cancellationToken) =>
         ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO scrapbook.photo_upload_receipts (storage_object_id, version_id, received_at, size, cleanup_after)
-            VALUES ({storageObjectId}, {receipt.VersionId}, {receipt.ReceivedAt}, {receipt.Size}, {cleanupAfter})
+            INSERT INTO scrapbook.photo_upload_receipts (storage_object_id, version_id, received_at, event_kind, size, cleanup_after)
+            VALUES ({storageObjectId}, {receipt.VersionId}, {receipt.ReceivedAt}, {receipt.EventKind}, {receipt.Size}, {cleanupAfter})
             ON CONFLICT (storage_object_id, version_id) DO NOTHING
             """, cancellationToken));
 
@@ -183,7 +223,7 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
             )
             UPDATE scrapbook.storage_objects
             SET state = 'uploading', version_id = {receipt.VersionId}, receipt_event_at = {receipt.ReceivedAt},
-                receipt_event_kind = 'put', observed_at = {now}
+                receipt_event_kind = {receipt.EventKind}, observed_at = {now}
             WHERE id = {submission.TemporaryObjectId} AND storage_objects_files_id = {submission.FileId}
                 AND kind = 'temporary' AND version_id IS NULL AND EXISTS (SELECT 1 FROM updated_session)
             """, cancellationToken));
@@ -202,6 +242,16 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
             ) AS "Value"
             """).ToListAsync(cancellationToken));
         return rows.Single();
+    }
+
+    public async Task<DateTimeOffset?> FindReceiptAtAsync(long objectId, string versionId, string eventKind,
+        CancellationToken cancellationToken)
+    {
+        var rows = await ExecuteAsync(() => context.Database.SqlQuery<DateTimeOffset>($"""
+            SELECT received_at AS "Value" FROM scrapbook.photo_upload_receipts
+            WHERE storage_object_id = {objectId} AND version_id = {versionId} AND event_kind = {eventKind}
+            """).ToListAsync(cancellationToken));
+        return rows.Count == 0 ? null : rows.Single();
     }
 
     public async Task<bool> ConfirmAsync(ConfirmPhotoSubmissionCommand command, CancellationToken cancellationToken)
@@ -245,8 +295,12 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
         var count = await ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
             WITH updated_file AS (
                 UPDATE scrapbook.files
-                SET actual_size = {file.Original.Size}, media_type = {file.Image.MediaType}, container = {file.Image.Container},
-                    width = {file.Image.Width}, height = {file.Image.Height}, orientation = {file.Image.Orientation},
+                SET actual_size = {file.Original.Size}, media_type = {file.Image?.MediaType ?? file.Video?.MediaType},
+                    container = {file.Image?.Container ?? file.Video?.Container},
+                    width = {file.Image?.Width ?? file.Video?.Width}, height = {file.Image?.Height ?? file.Video?.Height},
+                    orientation = {file.Image?.Orientation}, rotation = {(short?)file.Video?.Rotation},
+                    video_codec = {file.Video?.VideoCodec}, audio_codec = {file.Video?.AudioCodec}, duration = {file.Video?.Duration},
+                    frame_rate_numerator = {file.Video?.FrameRateNumerator}, frame_rate_denominator = {file.Video?.FrameRateDenominator},
                     validation_state = 'valid', processing_state = 'pending',
                     received_at = {Civil("file_received", file.ReceivedAt)}, validated_at = {committedAt},
                     confirmed_at = {Civil("file_confirmed", confirmedAt)}
@@ -322,6 +376,27 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
             UPDATE scrapbook.storage_objects AS object SET state = 'deleted', deleted_at = {now}
             FROM deleted_receipt AS receipt
             WHERE object.id = receipt.storage_object_id AND object.version_id = receipt.version_id AND object.kind = 'temporary'
+            """, cancellationToken));
+
+    public Task<PhotoSubmissionEntity?> FindMultipartCleanupAsync(DateTimeOffset terminalBefore, CancellationToken cancellationToken) =>
+        FindAsync(SelectSubmission + """
+             WHERE file.multipart_checksums IS NOT NULL AND session.state IN ('expired', 'confirmed', 'rejected')
+                AND session.completion_deadline_at <= ({0} AT TIME ZONE 'America/Sao_Paulo')
+                AND (session.state = 'expired' OR session.terminal_at <= {0})
+                AND NOT EXISTS (SELECT 1 FROM scrapbook.cleanup_jobs AS job
+                    WHERE job.cleanup_jobs_storage_objects_id = temporary.id
+                        AND job.action = 'abort_multipart' AND job.state = 'completed')
+             ORDER BY session.terminal_at, session.id LIMIT 1
+            """, [terminalBefore], cancellationToken);
+
+    public Task MarkMultipartAbortedAsync(long objectId, DateTimeOffset eligibleAt, DateTimeOffset completedAt,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO scrapbook.cleanup_jobs (cleanup_jobs_storage_objects_id, action, eligible_at, state, next_attempt_at, completed_at)
+            VALUES ({objectId}, 'abort_multipart', {eligibleAt}, 'completed', {completedAt}, {completedAt})
+            ON CONFLICT (cleanup_jobs_storage_objects_id, action) DO UPDATE
+            SET state = 'completed', completed_at = EXCLUDED.completed_at, lease_token = NULL, lease_until = NULL
+            WHERE cleanup_jobs.state <> 'completed'
             """, cancellationToken));
 
     private async Task<PhotoSubmissionEntity?> FindAsync(string sql, object[] parameters, CancellationToken cancellationToken)
