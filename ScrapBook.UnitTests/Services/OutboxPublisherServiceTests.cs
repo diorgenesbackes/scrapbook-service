@@ -77,6 +77,17 @@ public sealed class OutboxPublisherServiceTests
         Assert.Empty(repository.Failures);
     }
 
+    [Fact]
+    public async Task UsesTheStableMessageIdForHistoricalRowsWithoutCorrelationAsync()
+    {
+        var historical = Message() with { CorrelationId = Guid.Empty };
+
+        Assert.Equal(OutboxPublishResult.Published, await Service.PublishAsync(historical, CancellationToken.None));
+
+        AssertEnvelope(historical with { CorrelationId = historical.MessageId }, Assert.Single(publisher.Messages).Body);
+        Assert.Empty(repository.Failures);
+    }
+
     [Theory]
     [InlineData(1, true, false, OutboxPublishResult.RetryScheduled)]
     [InlineData(5, true, true, OutboxPublishResult.Failed)]
