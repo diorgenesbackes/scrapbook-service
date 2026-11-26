@@ -26,6 +26,8 @@ public sealed class EventConfiguration : IEntityTypeConfiguration<EventEntity>
         builder.Property(item => item.AccessFrozenAt).HasColumnName("access_frozen_at").HasColumnType("timestamp without time zone");
         builder.Property(item => item.AccessVersion).HasColumnName("access_version");
         builder.Property(item => item.LockedAt).HasColumnName("locked_at");
+        builder.Property(item => item.FirstRecordId).HasColumnName("first_record_id");
+        builder.Property(item => item.FirstRecordConfirmedAt).HasColumnName("first_record_confirmed_at").HasColumnType("timestamp without time zone");
         builder.Property(item => item.CreationKeyHash).HasColumnName("creation_key_hash");
         builder.Property(item => item.CreationPayloadHash).HasColumnName("creation_payload_hash");
     }

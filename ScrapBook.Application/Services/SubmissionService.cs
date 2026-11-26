@@ -17,7 +17,7 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
     PhotoSubmissionService? photos = null)
 {
     private const string Operation = "contribution.create";
-    internal const string FirstConfirmation = "event.first-record-confirmed.v1";
+    internal const string FirstConfirmation = FirstRecordConfirmedModel.Type;
     private static readonly TimeSpan ConsentLifetime = TimeSpan.FromMinutes(30);
 
     public async Task<SubmissionNoticeResponse> GetNoticeAsync(string code, CancellationToken cancellationToken)
