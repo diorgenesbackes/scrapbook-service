@@ -532,31 +532,31 @@ public sealed class VideoSubmissionServiceTests
 
     private PhotoSubmissionEntity Video(int size = 4, byte[][]? partChecksums = null, string? uploadId = null,
         PhotoReceiptModel? received = null, string category = "moment") => new()
-    {
-        SessionId = 7,
-        EventId = submissions.Event.Id,
-        RecordId = RecordId,
-        FileId = 17,
-        Position = 1,
-        TemporaryObjectId = 11,
-        OriginalObjectId = 12,
-        State = received is null ? "receiving" : "validating",
-        Format = "video",
-        Category = category,
-        Bucket = Bucket,
-        TemporaryKey = Temporary,
-        OriginalKey = Original,
-        TemporaryVersion = received?.VersionId,
-        ReceiptAt = received?.ReceivedAt,
-        FileKey = fileKey,
-        DeclaredMediaType = "video/mp4",
-        DeclaredSize = size,
-        Sha256 = Sha256,
-        MultipartId = uploadId,
-        PartSha256 = partChecksums,
-        StartedAt = new DateTime(2032, 3, 1, 11, 59, 59),
-        CompletionDeadlineAt = submissions.Event.CompletionDeadlineAt
-    };
+        {
+            SessionId = 7,
+            EventId = submissions.Event.Id,
+            RecordId = RecordId,
+            FileId = 17,
+            Position = 1,
+            TemporaryObjectId = 11,
+            OriginalObjectId = 12,
+            State = received is null ? "receiving" : "validating",
+            Format = "video",
+            Category = category,
+            Bucket = Bucket,
+            TemporaryKey = Temporary,
+            OriginalKey = Original,
+            TemporaryVersion = received?.VersionId,
+            ReceiptAt = received?.ReceivedAt,
+            FileKey = fileKey,
+            DeclaredMediaType = "video/mp4",
+            DeclaredSize = size,
+            Sha256 = Sha256,
+            MultipartId = uploadId,
+            PartSha256 = partChecksums,
+            StartedAt = new DateTime(2032, 3, 1, 11, 59, 59),
+            CompletionDeadlineAt = submissions.Event.CompletionDeadlineAt
+        };
 
     private static VideoPartModel Part(int number, int size, byte[]? checksum = null) =>
         new(number, size, checksum ?? PartChecksums[number - 1], $"etag-{number}");
