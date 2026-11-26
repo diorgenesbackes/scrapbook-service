@@ -12,7 +12,8 @@ public sealed class OutboxPublisherServiceTests
     private readonly EventTestTimeProvider clock = new();
     private readonly OutboxTestRepository repository = new();
     private readonly OutboxTestPublisher publisher = new();
-    private OutboxPublisherService Service => new(repository, publisher, clock);
+    private readonly EventStructuralLockTestRepository locks = new() { ConfirmedAt = new DateTime(2030, 12, 31, 21, 0, 0) };
+    private OutboxPublisherService Service => new(repository, publisher, locks, clock);
 
     [Fact]
     public async Task ClaimsOnlyFirstConfirmationsWithARecoverableLeaseAsync()
@@ -53,6 +54,7 @@ public sealed class OutboxPublisherServiceTests
         Assert.Equal(OutboxPublishResult.Published, await publishing);
         Assert.Equal((item.MessageId, item.LeaseToken!.Value, clock.Now, cancellation.Token),
             Assert.Single(repository.Published));
+        Assert.Empty(repository.Results);
     }
 
     [Fact]
@@ -97,6 +99,7 @@ public sealed class OutboxPublisherServiceTests
     {
         using var cancellation = new CancellationTokenSource();
         var item = Message() with { AttemptCount = attempt };
+        repository.Origin = item;
         publisher.Dispatch = _ => throw new OutboxPublishException(retryable, new InvalidOperationException("provider diagnostic"));
 
         Assert.Equal(expected, await Service.PublishAsync(item, cancellation.Token));
@@ -109,6 +112,14 @@ public sealed class OutboxPublisherServiceTests
         if (!terminal)
         {
             Assert.Equal(clock.Now.AddSeconds(2), failure.AvailableAt);
+            Assert.Empty(repository.Results);
+        }
+        else
+        {
+            var (result, token) = Assert.Single(repository.Results);
+            Assert.Equal(cancellation.Token, token);
+            StructuralLockOutboxAssertions.Failed(result, item, clock.Now, "publish", failure.ErrorCode);
+            Assert.True(repository.Transaction.Committed);
         }
 
         Assert.Empty(repository.Published);
@@ -130,6 +141,7 @@ public sealed class OutboxPublisherServiceTests
 
         Assert.Empty(repository.Published);
         Assert.Empty(repository.Failures);
+        Assert.Empty(repository.Results);
     }
 
     [Theory]
@@ -139,11 +151,84 @@ public sealed class OutboxPublisherServiceTests
     {
         var item = Message() with { Type = type, ProtocolVersion = version };
 
-        Assert.Equal(OutboxPublishResult.Failed, await Service.PublishAsync(item, CancellationToken.None));
+        Assert.Equal(OutboxPublishResult.InvalidFact, await Service.PublishAsync(item, CancellationToken.None));
 
         Assert.Empty(publisher.Messages);
         Assert.Empty(repository.Published);
         Assert.True(Assert.Single(repository.Failures).Terminal);
+        Assert.Empty(repository.Results);
+    }
+
+    [Fact]
+    public async Task DoesNotReportAFailedLockWhenTheOriginalConfirmationCannotBeVerifiedAsync()
+    {
+        var item = Message();
+        repository.Origin = item;
+        locks.ConfirmedAt = null;
+
+        Assert.Equal(OutboxPublishResult.InvalidFact, await Service.PublishAsync(item, CancellationToken.None));
+
+        Assert.Empty(publisher.Messages);
+        Assert.Empty(repository.Results);
+        Assert.Empty(repository.Published);
+    }
+
+    [Fact]
+    public async Task DoesNotReportATerminalFailureForAReplacedLeaseAsync()
+    {
+        var item = Message() with { AttemptCount = 5 };
+        repository.Origin = item with { LeaseToken = Guid.NewGuid() };
+        repository.CurrentLease = repository.Origin.LeaseToken;
+        publisher.Dispatch = _ => throw new OutboxPublishException(false, new InvalidOperationException());
+
+        Assert.Equal(OutboxPublishResult.LeaseLost, await Service.PublishAsync(item, CancellationToken.None));
+
+        Assert.Empty(repository.Results);
+        Assert.Empty(repository.Published);
+    }
+
+    [Fact]
+    public async Task ReusesTheSameTerminalPublicationOutcomeIdentityAcrossRecoveryAttemptsAsync()
+    {
+        var item = Message();
+        repository.Origin = item;
+        publisher.Dispatch = _ => throw new OutboxPublishException(false, new InvalidOperationException());
+
+        Assert.Equal(OutboxPublishResult.Failed, await Service.PublishAsync(item, CancellationToken.None));
+        var first = Assert.Single(repository.Results).Message;
+        clock.Now = clock.Now.AddSeconds(30);
+        var recovered = item with { LeaseToken = Guid.NewGuid(), AttemptCount = 6 };
+        repository.Origin = recovered;
+
+        Assert.Equal(OutboxPublishResult.Failed, await Service.PublishAsync(recovered, CancellationToken.None));
+
+        Assert.Equal(2, repository.Results.Count);
+        var retry = repository.Results[1].Message;
+        Assert.Equal(first.MessageId, retry.MessageId);
+        StructuralLockOutboxAssertions.Failed(retry, item, clock.Now, "publish", "PUBLISH_ATTEMPTS_EXHAUSTED");
+        Assert.Single(publisher.Messages);
+    }
+
+    [Fact]
+    public async Task DisposesWithoutCommittingWhenTheTerminalOutcomeCannotBeStoredAsync()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var item = Message() with { AttemptCount = 5 };
+        repository.Origin = item;
+        publisher.Dispatch = _ => throw new OutboxPublishException(false, new InvalidOperationException());
+        repository.BeforeResult = (_, token) =>
+        {
+            Assert.Equal(cancellation.Token, token);
+            Assert.False(repository.Transaction.Committed);
+            throw new PostgresUnavailableException();
+        };
+
+        await Assert.ThrowsAsync<PostgresUnavailableException>(() => Service.PublishAsync(item, cancellation.Token));
+
+        Assert.False(repository.Transaction.Committed);
+        Assert.True(repository.Transaction.Disposed);
+        Assert.Empty(repository.Results);
+        Assert.Empty(repository.Published);
     }
 
     [Fact]
@@ -159,9 +244,9 @@ public sealed class OutboxPublisherServiceTests
     }
 
     private OutboxMessageEntity Message() => new(
-        Guid.Parse("797e003a-e78b-5ade-a746-de13475a04f1"), FirstConfirmationType, 1, "event", 42,
+        Guid.Parse("3b0da52a-12ea-1258-ec0b-73e8530e90cf"), FirstConfirmationType, 1, "event", 42,
         JsonSerializer.Serialize(new { eventId = "42", recordId = "237", confirmedAt = clock.Now }),
-        Guid.Parse("da771942-1b5b-4c4b-885a-62260ad1fc65"), clock.Now, 1, Guid.NewGuid());
+        Guid.Parse("da771942-1b5b-4c4b-885a-62260ad1fc65"), clock.Now, 1, Guid.NewGuid(), "publishing");
 
     private static void AssertEnvelope(OutboxMessageEntity item, string body)
     {

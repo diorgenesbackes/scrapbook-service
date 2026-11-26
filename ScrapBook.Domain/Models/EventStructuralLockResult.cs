@@ -4,5 +4,6 @@ public enum EventStructuralLockResult
 {
     Applied,
     Duplicate,
+    Terminal,
     Rejected
 }
