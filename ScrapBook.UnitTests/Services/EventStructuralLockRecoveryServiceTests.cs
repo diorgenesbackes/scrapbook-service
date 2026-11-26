@@ -48,6 +48,50 @@ public sealed class EventStructuralLockRecoveryServiceTests
         Assert.Empty(outbox.Results);
     }
 
+    [Fact]
+    public async Task ReopensAFailedPublicationWhoseDeliveryAlreadyAppliedTheLockAsync()
+    {
+        var originallyClaimed = Origin() with { State = "publishing", AttemptCount = 5, LeaseToken = Guid.NewGuid() };
+        outbox.Origin = originallyClaimed;
+        var firstTransport = new OutboxTestPublisher
+        {
+            Dispatch = _ => throw new OutboxPublishException(true, new InvalidOperationException())
+        };
+        var firstPublication = new OutboxPublisherService(outbox, firstTransport, locks, clock);
+        Assert.Equal(OutboxPublishResult.Failed, await firstPublication.PublishAsync(originallyClaimed, CancellationToken.None));
+        var failed = originallyClaimed with { State = "failed", LeaseToken = null };
+        outbox.Origin = failed;
+        var alreadyDelivered = Assert.Single(firstTransport.Messages).Body;
+        Assert.Equal(EventStructuralLockResult.Applied, await Consumer.ConsumeAsync(alreadyDelivered, CancellationToken.None));
+        events.Item = Event(clock.Now.UtcDateTime, 237);
+        var existingOutcomes = outbox.Results.ToArray();
+        Assert.Equal(2, existingOutcomes.Length);
+        var completed = Assert.IsType<ProcessedMessageEntity>(locks.Processed);
+        Assert.Equal("completed", completed.State);
+
+        Assert.Equal(EventStructuralLockRecoveryResult.Reopened,
+            await Recovery.RecoverAsync(Command(EventStructuralLockRecoveryMode.Publish), CancellationToken.None));
+
+        var reopened = Assert.IsType<OutboxMessageEntity>(outbox.Origin);
+        Assert.Equal(failed with { State = "pending", AttemptCount = 0 }, reopened);
+        Assert.Same(completed, locks.Processed);
+        Assert.Empty(locks.Rearms);
+        Assert.True(events.Transaction.Committed);
+        var publisher = new OutboxTestPublisher();
+        var publication = new OutboxPublisherService(outbox, publisher, locks, clock);
+        var retry = reopened with { State = "publishing", AttemptCount = 1, LeaseToken = Guid.NewGuid() };
+        outbox.Origin = retry;
+        Assert.Equal(OutboxPublishResult.Published, await publication.PublishAsync(retry, CancellationToken.None));
+        var delivery = Assert.Single(publisher.Messages).Body;
+        Assert.Equal(alreadyDelivered, delivery);
+
+        Assert.Equal(EventStructuralLockResult.Duplicate, await Consumer.ConsumeAsync(delivery, CancellationToken.None));
+
+        Assert.Single(locks.Applications);
+        Assert.Single(locks.Completions);
+        Assert.Equal(existingOutcomes, outbox.Results);
+    }
+
     [Theory]
     [InlineData(30, false)]
     [InlineData(31, true)]
@@ -144,7 +188,7 @@ public sealed class EventStructuralLockRecoveryServiceTests
     }
 
     [Theory]
-    [InlineData(237, EventStructuralLockRecoveryResult.AlreadyCompleted)]
+    [InlineData(237, EventStructuralLockRecoveryResult.Reopened)]
     [InlineData(238, EventStructuralLockRecoveryResult.Rejected)]
     public async Task ReconcilesTheDurableLockBeforeAuthorizingAnExpiredRecoveryAsync(
         long firstRecordId, EventStructuralLockRecoveryResult expected)
@@ -152,11 +196,13 @@ public sealed class EventStructuralLockRecoveryServiceTests
         clock.Now = ConfirmedAt.AddDays(31);
         outbox.Origin = Origin() with { State = "failed", AttemptCount = 5 };
         events.Item = Event(ConfirmedAt.AddSeconds(2).UtcDateTime, firstRecordId);
-        var command = Command(EventStructuralLockRecoveryMode.Publish) with { ReconcileExpired = true };
+        var command = Command(EventStructuralLockRecoveryMode.Publish);
 
-        Assert.Equal(expected, await Recovery.RecoverAsync(command, CancellationToken.None));
-
+        Assert.Equal(EventStructuralLockRecoveryResult.Rejected, await Recovery.RecoverAsync(command, CancellationToken.None));
         Assert.Empty(outbox.Reopened);
+        Assert.Equal(expected, await Recovery.RecoverAsync(command with { ReconcileExpired = true }, CancellationToken.None));
+
+        Assert.Equal(expected == EventStructuralLockRecoveryResult.Reopened ? 1 : 0, outbox.Reopened.Count);
         Assert.Empty(outbox.Results);
         Assert.Empty(locks.Applications);
         Assert.Empty(locks.Rearms);
