@@ -38,7 +38,7 @@ RUN meson setup dav1d-build dav1d-1.5.4 --prefix /opt/dav1d --libdir lib --defau
 WORKDIR /video-tools/ffmpeg-9.1
 RUN PKG_CONFIG_PATH=/opt/dav1d/lib/pkgconfig ./configure --disable-autodetect --disable-doc --disable-ffplay \
         --disable-network --disable-protocols --enable-protocol=file \
-        --disable-demuxers --enable-demuxer=mov,matroska \
+        --disable-demuxers --enable-demuxer=mov,matroska,mp3,wav,ogg \
         --enable-gpl --enable-libdav1d --enable-libopus --enable-libvpx --enable-libx264 --enable-zlib \
     && make -j4 ffmpeg ffprobe \
     && mkdir -p /out/bin /out/licenses \
