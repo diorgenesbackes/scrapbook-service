@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using ScrapBook.Api.Options;
@@ -52,7 +53,7 @@ public static class EventStructuralLockRecoveryRunner
             return WriteResult(await service.RecoverAsync(command, deadline.Token));
         }
         catch (Exception error) when (error is StartupConfigurationException or PostgresUnavailableException
-            or PostgresWriteRejectedException or IOException)
+            or PostgresWriteRejectedException or DbException or IOException)
         {
             Console.Error.WriteLine("RECOVERY_UNAVAILABLE");
             return 4;
