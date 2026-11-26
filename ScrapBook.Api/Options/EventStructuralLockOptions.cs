@@ -21,13 +21,16 @@ public sealed record EventStructuralLockOptions(bool Enabled, string Region, str
         }
         var topic = section["TopicArn"];
         var arn = topic?.Split(':');
-        if (arn is not ["arn", "aws" or "aws-cn" or "aws-us-gov", "sns", var arnRegion, var account, var topicName]
+        if (arn is not ["arn", ("aws" or "aws-cn" or "aws-us-gov") and var partition, "sns", var arnRegion, var account, var topicName]
             || arnRegion != region || account.Length != 12 || !account.All(IsDigit) || !IsStandardName(topicName))
         {
             throw Invalid("TopicArn");
         }
         var queue = RequireUrl(section["QueueUrl"], development, "QueueUrl");
-        if (!IsStandardName(queue.Segments[^1]))
+        var queueName = queue.Segments[^1];
+        var sqsDomain = partition == "aws-cn" ? "amazonaws.com.cn" : "amazonaws.com";
+        if (!IsStandardName(queueName) || (!development && (!queue.IsDefaultPort
+            || queue.Host != $"sqs.{region}.{sqsDomain}" || queue.AbsolutePath != $"/{account}/{queueName}")))
         {
             throw Invalid("QueueUrl");
         }
