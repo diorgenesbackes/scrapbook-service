@@ -90,7 +90,7 @@ public sealed class EventStructuralLockRecoveryService(IEventWriteRepository eve
     }
 
     private async Task<EventStructuralLockRecoveryResult> ReopenAsync(EventStructuralLockRecoveryCommand command,
-        OutboxMessageEntity original, ProcessedMessageEntity? processed, DateTimeOffset now, bool expired,
+        OutboxMessageEntity original, ProcessedMessageEntity? processed, DateTimeOffset now, bool requiresReplayAuthorization,
         CancellationToken cancellationToken)
     {
         var rearming = command.Mode == EventStructuralLockRecoveryMode.Consume;
