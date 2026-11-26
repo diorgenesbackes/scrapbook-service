@@ -86,7 +86,15 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         var keyId = RequireEnabled();
         ValidateCode(code);
         await using var transaction = await repository.BeginAsync(cancellationToken);
-        var item = await FindEventAsync(code, true, cancellationToken);
+        var isPhoto = request.Format == "photo";
+        var item = isPhoto
+            ? await repository.FindEventForShareAsync(code, cancellationToken) ?? throw new PublicEventNotFoundException()
+            : await FindEventAsync(code, true, cancellationToken);
+        if (isPhoto)
+        {
+            await repository.LockPhotoAttemptAsync(item.Id, attemptKey, cancellationToken);
+        }
+
         var existing = await repository.FindAttemptAsync(item.Id, Operation, attemptKey, cancellationToken);
         if (existing is not null) AuthorizeAttempt(item.Id, attemptKey, secret, existing, ingress);
 
