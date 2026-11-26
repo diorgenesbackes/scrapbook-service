@@ -149,14 +149,20 @@ public sealed class VideoSubmissionService(IPhotoSubmissionRepository submission
         if (file.PartSha256 is null) return true;
 
         var open = await storage.ListMultipartUploadsAsync(file.Bucket, file.TemporaryKey, cancellationToken);
-        if (open.Count == 0) return true;
-
-        var partsRemain = false;
         foreach (var uploadId in open)
         {
             await storage.AbortMultipartUploadAsync(file.Bucket, file.TemporaryKey, uploadId, cancellationToken);
             var parts = await storage.ListPartsAsync(file.Bucket, file.TemporaryKey, uploadId, cancellationToken);
-            partsRemain |= parts is { Count: > 0 };
+            if (parts is { Count: > 0 }) return false;
+        }
+        if (file.MultipartId is { } canonical && !open.Contains(canonical, StringComparer.Ordinal))
+        {
+            var parts = await storage.ListPartsAsync(file.Bucket, file.TemporaryKey, canonical, cancellationToken);
+            if (parts is { Count: > 0 })
+            {
+                await storage.AbortMultipartUploadAsync(file.Bucket, file.TemporaryKey, canonical, cancellationToken);
+                return false;
+            }
         }
         var remaining = await storage.ListMultipartUploadsAsync(file.Bucket, file.TemporaryKey, cancellationToken);
         return !partsRemain && remaining.Count == 0;

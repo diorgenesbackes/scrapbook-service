@@ -42,15 +42,15 @@ public sealed class FfprobeVideoDecoder(string executablePath)
             var codec = RequireCodec(primaryVideo);
             var audio = streams.EnumerateArray().FirstOrDefault(stream => Text(stream, "codec_type") == "audio");
             var audioCodec = audio.ValueKind == JsonValueKind.Object ? RequireCodec(audio) : null;
-            var audioIndex = audioCodec is null ? (int?)null : RequiredInteger(audio, "index", 0);
             var (numerator, denominator) = FrameRate(primaryVideo);
             var (mediaType, container) = Container(format, webm);
-            var sampleRate = int.TryParse(Text(audio, "sample_rate"), NumberStyles.None, CultureInfo.InvariantCulture,
-                out var parsedSampleRate) && parsedSampleRate > 0 ? parsedSampleRate : 0;
-            var measuredDuration = await MeasurePacketDurationAsync(path, webm, index, audioIndex, sampleRate,
-                (decimal)denominator / numerator, WebmTimestampStep(primaryVideo, webm), budget.Token);
-            var duration = Math.Max(Duration(primaryVideo), measuredDuration);
-            if (!webm) duration = Math.Max(duration, Math.Max(Duration(format), Duration(audio)));
+            var playable = streams.EnumerateArray().Where(stream => Text(stream, "codec_type") == "audio"
+                || Text(stream, "codec_type") == "video" && !IsAttachedPicture(stream)).ToArray();
+            var tracks = playable.ToDictionary(stream => RequiredInteger(stream, "index", 0), Timing);
+            var duration = await MeasurePacketDurationAsync(path, webm, index, tracks,
+                WebmTimestampStep(primaryVideo, webm), budget.Token);
+            duration = Math.Max(duration, playable.Max(Duration));
+            if (!webm) duration = Math.Max(duration, Duration(format));
 
             await RequireDecodedFrameAsync(path, webm, index, budget.Token);
             return new VideoMetadataModel(mediaType, container, codec, audioCodec, duration, width, height,
@@ -75,12 +75,26 @@ public sealed class FfprobeVideoDecoder(string executablePath)
         if (!result.AsSpan().Contains("video", StringComparison.Ordinal)) throw new PhotoContentInvalidException();
     }
 
-    private async Task<decimal> MeasurePacketDurationAsync(string path, bool webm, int video, int? audio,
-        int sampleRate, decimal frameDuration, decimal timestampStep, CancellationToken cancellationToken)
+    private static (decimal FrameDuration, int SampleRate) Timing(JsonElement stream)
+    {
+        if (Text(stream, "codec_type") == "video")
+        {
+            var (numerator, denominator) = FrameRate(stream);
+            return ((decimal)denominator / numerator, 0);
+        }
+
+        return (0, int.TryParse(Text(stream, "sample_rate"), NumberStyles.None, CultureInfo.InvariantCulture,
+            out var rate) && rate > 0 ? rate : 0);
+    }
+
+    private async Task<decimal> MeasurePacketDurationAsync(string path, bool webm, int video,
+        IReadOnlyDictionary<int, (decimal FrameDuration, int SampleRate)> tracks, decimal timestampStep,
+        CancellationToken cancellationToken)
     {
         var result = await ProbeAsync(path, webm, MaximumPacketOutput, ["-show_packets", "-show_entries",
             "packet=stream_index,pts_time,duration_time,flags:packet_side_data=skip_samples,discard_padding",
             "-output_format", "compact=p=1:nk=0"], cancellationToken);
+        var hasPrimaryVideo = false;
         decimal? videoFirst = null;
         decimal? videoLast = null;
         decimal? audioFirst = null;
@@ -94,23 +108,25 @@ public sealed class FfprobeVideoDecoder(string executablePath)
             var flags = PacketField(packet, "flags=");
             if (flags.IndexOf('C') >= 0) throw new PhotoContentInvalidException();
             if (flags.IndexOf('D') >= 0 || !int.TryParse(streamText, NumberStyles.None, CultureInfo.InvariantCulture, out var stream)
-                || stream != video && stream != audio || !TryDuration(PacketField(packet, "pts_time="), out var pts))
+                || !tracks.TryGetValue(stream, out var timing) || !TryDuration(PacketField(packet, "pts_time="), out var pts))
                 continue;
 
             if (!TryDuration(PacketField(packet, "duration_time="), out var length) || length <= 0)
-                length = stream == video ? frameDuration : 0;
-            if (stream == video)
+                length = timing.FrameDuration;
+            if (timing.FrameDuration > 0)
             {
+                hasPrimaryVideo |= stream == video;
                 videoFirst = Math.Min(videoFirst ?? pts, pts);
                 videoLast = Math.Max(videoLast ?? pts, pts + length);
             }
             else
             {
-                RecordAudioPacket(packet, pts, length, sampleRate, ref audioFirst, ref audioLast);
+                RecordAudioPacket(packet, pts, length, timing.SampleRate, ref audioFirst, ref audioLast);
             }
         }
 
-        if (videoFirst is null || videoLast is null || videoLast <= videoFirst) throw new PhotoContentInvalidException();
+        if (!hasPrimaryVideo || videoFirst is null || videoLast is null || videoLast <= videoFirst)
+            throw new PhotoContentInvalidException();
         if (audioFirst is null || audioLast is null) return videoLast.Value - videoFirst.Value;
         if (webm)
         {
