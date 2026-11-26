@@ -40,16 +40,29 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
         return rows.SingleOrDefault();
     }
 
-    public async Task InsertAsync(CreatePhotoSubmissionCommand command, CancellationToken cancellationToken)
+    public Task InsertAsync(CreatePhotoSubmissionCommand command, CancellationToken cancellationToken)
     {
-        var rows = await ExecuteAsync(() => context.Database.SqlQuery<long>($"""
-            WITH inserted_record AS (
+        var files = command.Files;
+        var fileHashes = new NpgsqlParameter("file_hashes", NpgsqlDbType.Array | NpgsqlDbType.Bytea)
+        {
+            Value = files.Select(file => file.Manifest.Sha256).ToArray()
+        };
+        return ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
+            WITH file_intents AS (
+                SELECT position, client_key, declared_type, declared_size, sha256, temporary_key, original_key
+                FROM unnest(
+                    {files.Select(file => file.Position).ToArray()}, {files.Select(file => file.Manifest.FileKey).ToArray()},
+                    {files.Select(file => file.Manifest.DeclaredMediaType).ToArray()},
+                    {files.Select(file => file.Manifest.SizeBytes).ToArray()}, {fileHashes},
+                    {files.Select(file => file.TemporaryKey).ToArray()}, {files.Select(file => file.OriginalKey).ToArray()}
+                ) AS intent(position, client_key, declared_type, declared_size, sha256, temporary_key, original_key)
+            ), inserted_record AS (
                 INSERT INTO scrapbook.records (
                     records_events_id, records_consent_notices_id, category, format, sender_name, caption,
                     expected_file_count, consented_at, submitted_at, state
                 ) VALUES (
                     {command.Event.Id}, {command.NoticeId}, {command.Category}, 'photo', {command.GuestName}, {command.Caption},
-                    {command.Files.Count}, {Civil("consented_at", command.ConsentedAt)}, {Civil("submitted_at", command.SubmittedAt)},
+                    {files.Count}, {Civil("consented_at", command.ConsentedAt)}, {Civil("submitted_at", command.SubmittedAt)},
                     'receiving'
                 ) RETURNING id
             ), inserted_operation AS (
@@ -61,41 +74,36 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
                     {command.AuthorizationHash}, {command.HashKeyId}, {command.AuthorizationExpiresAt}, 'in_progress'
                 FROM inserted_record
                 RETURNING id, idempotent_operations_records_id
-            )
-            INSERT INTO scrapbook.upload_sessions (
-                upload_sessions_events_id, upload_sessions_records_id, upload_sessions_idempotent_operations_id,
-                state, window_opens_at, window_closes_at, completion_deadline_at, started_at, request_correlation_id
-            )
-            SELECT {command.Event.Id}, idempotent_operations_records_id, id, 'receiving',
-                {Civil("window_opens_at", command.Event.SubmissionOpensAt)}, {Civil("window_closes_at", command.Event.SubmissionClosesAt)},
-                {Civil("completion_deadline_at", command.Event.CompletionDeadlineAt)}, {Civil("started_at", command.SubmittedAt)},
-                {command.CorrelationId}
-            FROM inserted_operation
-            RETURNING upload_sessions_records_id AS "Value"
-            """).ToListAsync(cancellationToken));
-        var recordId = rows.Single();
-        foreach (var file in command.Files)
-        {
-            await InsertFileAsync(recordId, command.Bucket, file, cancellationToken);
-        }
-    }
-
-    private Task InsertFileAsync(long recordId, string bucket, PhotoUploadIntentModel file, CancellationToken cancellationToken) =>
-        ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
-            WITH inserted_file AS (
+            ), inserted_session AS (
+                INSERT INTO scrapbook.upload_sessions (
+                    upload_sessions_events_id, upload_sessions_records_id, upload_sessions_idempotent_operations_id,
+                    state, window_opens_at, window_closes_at, completion_deadline_at, started_at, request_correlation_id
+                )
+                SELECT {command.Event.Id}, idempotent_operations_records_id, id, 'receiving',
+                    {Civil("window_opens_at", command.Event.SubmissionOpensAt)}, {Civil("window_closes_at", command.Event.SubmissionClosesAt)},
+                    {Civil("completion_deadline_at", command.Event.CompletionDeadlineAt)}, {Civil("started_at", command.SubmittedAt)},
+                    {command.CorrelationId}
+                FROM inserted_operation
+                RETURNING upload_sessions_records_id
+            ), inserted_files AS (
                 INSERT INTO scrapbook.files (
                     files_records_id, position, client_key, kind, declared_type, declared_size, sha256,
                     validation_state, processing_state
-                ) VALUES (
-                    {recordId}, {file.Position}, {file.Manifest.FileKey}, 'photo', {file.Manifest.DeclaredMediaType},
-                    {file.Manifest.SizeBytes}, {file.Manifest.Sha256}, 'expected', 'not_requested'
-                ) RETURNING id
+                )
+                SELECT session.upload_sessions_records_id, intent.position, intent.client_key, 'photo',
+                    intent.declared_type, intent.declared_size, intent.sha256, 'expected', 'not_requested'
+                FROM inserted_session AS session
+                CROSS JOIN file_intents AS intent
+                ORDER BY intent.position
+                RETURNING id, position
             )
             INSERT INTO scrapbook.storage_objects (storage_objects_files_id, kind, state, bucket, object_key)
-            SELECT file.id, object.kind, 'planned', {bucket}, object.key
-            FROM inserted_file AS file
-            CROSS JOIN (VALUES ('temporary', {file.TemporaryKey}), ('original', {file.OriginalKey})) AS object(kind, key)
+            SELECT file.id, object.kind, 'planned', {command.Bucket}, object.key
+            FROM inserted_files AS file
+            JOIN file_intents AS intent ON intent.position = file.position
+            CROSS JOIN LATERAL (VALUES ('temporary', intent.temporary_key), ('original', intent.original_key)) AS object(kind, key)
             """, cancellationToken));
+    }
 
     public Task<PhotoSubmissionEntity?> FindForRecordAsync(long recordId, Guid fileKey, CancellationToken cancellationToken) =>
         FindAsync(SelectSubmission + " WHERE record.id = {0} AND file.client_key = {1}", [recordId, fileKey], cancellationToken);
