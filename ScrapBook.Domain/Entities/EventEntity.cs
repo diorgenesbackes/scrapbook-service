@@ -18,6 +18,8 @@ public sealed class EventEntity
     public DateTime? AccessFrozenAt { get; set; }
     public long AccessVersion { get; set; } = 1;
     public DateTime? LockedAt { get; init; }
+    public long? FirstRecordId { get; init; }
+    public DateTime? FirstRecordConfirmedAt { get; init; }
     public byte[]? CreationKeyHash { get; init; }
     public byte[]? CreationPayloadHash { get; init; }
 }

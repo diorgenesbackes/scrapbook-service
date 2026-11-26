@@ -1,0 +1,51 @@
+using ScrapBook.Application.Services;
+using ScrapBook.Domain.Entities;
+using ScrapBook.Domain.Exceptions;
+using ScrapBook.Domain.Models;
+
+namespace ScrapBook.Api.Workers;
+
+public sealed class OutboxPublisherWorker(IServiceScopeFactory scopes, ILogger<OutboxPublisherWorker> logger) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                var batch = await ClaimAsync(stoppingToken);
+                if (batch.Count == 0)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(500), stoppingToken);
+                    continue;
+                }
+                await Task.WhenAll(batch.Select(item => PublishAsync(item, stoppingToken)));
+            }
+            catch (PostgresUnavailableException)
+            {
+                logger.LogWarning("Outbox database unavailable. {ErrorCode}", "OUTBOX_POSTGRES_UNAVAILABLE");
+                await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
+            }
+        }
+    }
+
+    private async Task<IReadOnlyList<OutboxMessageEntity>> ClaimAsync(CancellationToken cancellationToken)
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<OutboxPublisherService>().ClaimAsync(cancellationToken);
+    }
+
+    private async Task PublishAsync(OutboxMessageEntity item, CancellationToken cancellationToken)
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        var result = await scope.ServiceProvider.GetRequiredService<OutboxPublisherService>().PublishAsync(item, cancellationToken);
+        if (result == OutboxPublishResult.Failed)
+        {
+            logger.LogError("Outbox message is pending recovery. {ErrorCode} {CorrelationId}", "OUTBOX_PUBLISH_FAILED", item.CorrelationId);
+        }
+        else if (result is OutboxPublishResult.RetryScheduled or OutboxPublishResult.LeaseLost)
+        {
+            logger.LogWarning("Outbox publication will be reconciled. {Outcome} {CorrelationId}", result, item.CorrelationId);
+        }
+    }
+}
