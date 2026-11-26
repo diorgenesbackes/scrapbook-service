@@ -4,6 +4,9 @@ public sealed class SubmissionAttemptEntity
 {
     public long RecordId { get; init; }
     public string? Format { get; init; }
+    public string? Category { get; init; }
+    public int[]? PendingPositions { get; init; }
+    public int[]? ProblemPositions { get; init; }
     public DateTime? CompletionDeadlineAt { get; init; }
     public string? ResultCode { get; init; }
     public required string State { get; init; }

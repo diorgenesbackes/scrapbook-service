@@ -7,9 +7,10 @@ namespace ScrapBook.UnitTests.Services;
 
 internal sealed class PhotoSubmissionStorageStub(byte[] bytes) : IPhotoSubmissionStorage
 {
+    private readonly Dictionary<string, PhotoObjectModel> copiedObjects = [];
+
     public byte[] Bytes { get; set; } = bytes;
     public string? UnprovenVersion { get; set; }
-    public PhotoObjectModel? CopiedObject { get; private set; }
     public bool DeleteUnavailable { get; set; }
     public List<(string Bucket, string Key, string MediaType, int Size, byte[] Hash, DateTimeOffset ExpiresAt)> Authorizations { get; } = [];
     public List<(string Key, string VersionId)> Reads { get; } = [];
@@ -34,20 +35,21 @@ internal sealed class PhotoSubmissionStorageStub(byte[] bytes) : IPhotoSubmissio
 
     public Task<IReadOnlyList<PhotoVersionModel>> ListVersionsAsync(string bucket, string key, CancellationToken cancellationToken)
     {
-        var version = key == Copies.LastOrDefault().Destination ? CopiedObject?.VersionId : UnprovenVersion;
+        var version = copiedObjects.TryGetValue(key, out var original) ? original.VersionId : UnprovenVersion;
         IReadOnlyList<PhotoVersionModel> versions = version is null ? [] : [new(version)];
         return Task.FromResult(versions);
     }
 
     public Task<PhotoObjectModel?> ReadMetadataAsync(string bucket, string key, string versionId, CancellationToken cancellationToken) =>
-        Task.FromResult(CopiedObject);
+        Task.FromResult(copiedObjects.GetValueOrDefault(key));
 
     public Task<string> CopyAsync(string bucket, string sourceKey, string sourceVersion, string destinationKey, string mediaType,
         CancellationToken cancellationToken)
     {
         Copies.Add((sourceKey, sourceVersion, destinationKey));
-        CopiedObject = new("original-version", Bytes.Length, DateTimeOffset.UnixEpoch, sourceVersion, null);
-        return Task.FromResult(CopiedObject.VersionId);
+        var original = new PhotoObjectModel("original-version", Bytes.Length, DateTimeOffset.UnixEpoch, sourceVersion, null);
+        copiedObjects[destinationKey] = original;
+        return Task.FromResult(original.VersionId);
     }
 
     public Task DeleteAsync(string bucket, string key, string versionId, CancellationToken cancellationToken)

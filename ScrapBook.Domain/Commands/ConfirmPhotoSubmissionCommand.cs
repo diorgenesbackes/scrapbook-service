@@ -3,5 +3,5 @@ using ScrapBook.Domain.Models;
 
 namespace ScrapBook.Domain.Commands;
 
-public sealed record ConfirmPhotoSubmissionCommand(PhotoSubmissionEntity Submission, Guid Lease, PhotoImageModel Image,
-    PhotoObjectModel Original, DateTime ReceivedAt, DateTime ConfirmedAt, DateTimeOffset CommittedAt);
+public sealed record ConfirmPhotoSubmissionCommand(PhotoSubmissionEntity Submission, Guid Lease,
+    IReadOnlyList<ConfirmPhotoFileModel> Files, DateTime ReceivedAt, DateTime ConfirmedAt, DateTimeOffset CommittedAt);
