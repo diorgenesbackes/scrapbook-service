@@ -15,7 +15,12 @@ public sealed class VideoSubmissionService(IPhotoSubmissionRepository submission
     private const int MaximumSize = 500_000_000;
     private const int PartSize = 16 * 1024 * 1024;
     private const int MultipartThreshold = 2 * PartSize;
+    private const string Expired = "expired";
+    private static readonly string[] CleanupTerminalStates = [Expired, "confirmed", "rejected"];
     private static readonly TimeSpan InitializationLease = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan CleanupLeaseDuration = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan CleanupStorageBudget = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan CleanupRetryDelay = TimeSpan.FromMinutes(1);
 
     internal static PhotoManifestModel NormalizeFile(PhotoSubmissionFileRequest file)
     {
@@ -145,24 +150,64 @@ public sealed class VideoSubmissionService(IPhotoSubmissionRepository submission
 
         var open = await storage.ListMultipartUploadsAsync(file.Bucket, file.TemporaryKey, cancellationToken);
         if (open.Count == 0) return true;
+
+        var partsRemain = false;
         foreach (var uploadId in open)
         {
             await storage.AbortMultipartUploadAsync(file.Bucket, file.TemporaryKey, uploadId, cancellationToken);
+            var parts = await storage.ListPartsAsync(file.Bucket, file.TemporaryKey, uploadId, cancellationToken);
+            partsRemain |= parts is { Count: > 0 };
         }
         var remaining = await storage.ListMultipartUploadsAsync(file.Bucket, file.TemporaryKey, cancellationToken);
-        return remaining.Count == 0;
+        return !partsRemain && remaining.Count == 0;
     }
 
     internal async Task<bool> CleanMultipartAsync(DateTimeOffset now, TimeSpan cleanupDelay, CancellationToken cancellationToken)
     {
-        var file = await videos.FindMultipartCleanupAsync(now - cleanupDelay, cancellationToken);
-        if (file is null || !await AbortOpenUploadsAsync(file, cancellationToken)) return false;
+        var file = await videos.FindMultipartCleanupAsync(now, now - cleanupDelay, CleanupTerminalStates, Expired,
+            cancellationToken);
+        if (file is null) return false;
 
         var deadline = PhotoSubmissionService.Deadline(file.CompletionDeadlineAt);
-        var anchor = file.State != "expired" && file.TerminalAt > deadline ? file.TerminalAt.Value : deadline;
-        await videos.MarkMultipartAbortedAsync(file.TemporaryObjectId, anchor + cleanupDelay, clock.GetUtcNow(),
-            cancellationToken);
+        var anchor = file.State != Expired && file.TerminalAt is { } terminalAt && terminalAt > deadline ? terminalAt : deadline;
+        var lease = Guid.NewGuid();
+        var claimAt = clock.GetUtcNow();
+        if (!await videos.TryClaimMultipartCleanupAsync(file.TemporaryObjectId, anchor + cleanupDelay, claimAt,
+                lease, claimAt + CleanupLeaseDuration, cancellationToken))
+        {
+            return true;
+        }
+
+        var error = await AttemptMultipartCleanupAsync(file, cancellationToken);
+        var finishedAt = clock.GetUtcNow();
+        if (error is null)
+        {
+            await videos.MarkMultipartAbortedAsync(file.TemporaryObjectId, lease, finishedAt, cancellationToken);
+        }
+        else
+        {
+            await videos.ScheduleMultipartCleanupAsync(file.TemporaryObjectId, lease, finishedAt, finishedAt + CleanupRetryDelay,
+                error, cancellationToken);
+        }
         return true;
+    }
+
+    private async Task<string?> AttemptMultipartCleanupAsync(PhotoSubmissionEntity file, CancellationToken cancellationToken)
+    {
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(CleanupStorageBudget);
+        try
+        {
+            return await AbortOpenUploadsAsync(file, budget.Token) ? null : "video-multipart-abort-pending";
+        }
+        catch (PhotoStorageUnavailableException)
+        {
+            return "video-multipart-storage-unavailable";
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return "video-multipart-cleanup-timeout";
+        }
     }
 
     internal async Task<bool> IsLateReceiptAsync(PhotoSubmissionEntity file, string versionId, CancellationToken cancellationToken)

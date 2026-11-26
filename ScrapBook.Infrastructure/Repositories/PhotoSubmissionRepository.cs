@@ -378,25 +378,57 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
             WHERE object.id = receipt.storage_object_id AND object.version_id = receipt.version_id AND object.kind = 'temporary'
             """, cancellationToken));
 
-    public Task<PhotoSubmissionEntity?> FindMultipartCleanupAsync(DateTimeOffset terminalBefore, CancellationToken cancellationToken) =>
+    public Task<PhotoSubmissionEntity?> FindMultipartCleanupAsync(DateTimeOffset now, DateTimeOffset terminalBefore,
+        string[] terminalStates, string deadlineOnlyState, CancellationToken cancellationToken) =>
         FindAsync(SelectSubmission + """
-             WHERE file.multipart_checksums IS NOT NULL AND session.state IN ('expired', 'confirmed', 'rejected')
-                AND session.completion_deadline_at <= ({0} AT TIME ZONE 'America/Sao_Paulo')
-                AND (session.state = 'expired' OR session.terminal_at <= {0})
-                AND NOT EXISTS (SELECT 1 FROM scrapbook.cleanup_jobs AS job
-                    WHERE job.cleanup_jobs_storage_objects_id = temporary.id
-                        AND job.action = 'abort_multipart' AND job.state = 'completed')
-             ORDER BY session.terminal_at, session.id LIMIT 1
-            """, [terminalBefore], cancellationToken);
+             LEFT JOIN scrapbook.cleanup_jobs AS job
+                ON job.cleanup_jobs_storage_objects_id = temporary.id AND job.action = 'abort_multipart'
+             WHERE file.multipart_checksums IS NOT NULL AND session.state = ANY({2})
+                AND session.completion_deadline_at <= ({1} AT TIME ZONE 'America/Sao_Paulo')
+                AND (session.state = {3} OR session.terminal_at <= {1})
+                AND (job.id IS NULL OR (job.state IN ('pending', 'running', 'reconciling')
+                    AND job.eligible_at <= {0} AND job.next_attempt_at <= {0}
+                    AND (job.lease_until IS NULL OR job.lease_until <= {0})))
+             ORDER BY COALESCE(job.next_attempt_at, session.terminal_at), session.id LIMIT 1
+            """, [now, terminalBefore, terminalStates, deadlineOnlyState], cancellationToken);
 
-    public Task MarkMultipartAbortedAsync(long objectId, DateTimeOffset eligibleAt, DateTimeOffset completedAt,
-        CancellationToken cancellationToken) =>
-        ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO scrapbook.cleanup_jobs (cleanup_jobs_storage_objects_id, action, eligible_at, state, next_attempt_at, completed_at)
-            VALUES ({objectId}, 'abort_multipart', {eligibleAt}, 'completed', {completedAt}, {completedAt})
+    public async Task<bool> TryClaimMultipartCleanupAsync(long objectId, DateTimeOffset eligibleAt, DateTimeOffset now,
+        Guid lease, DateTimeOffset leaseUntil, CancellationToken cancellationToken)
+    {
+        var count = await ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
+            INSERT INTO scrapbook.cleanup_jobs (
+                cleanup_jobs_storage_objects_id, action, eligible_at, state, next_attempt_at, attempt_count, lease_token, lease_until
+            )
+            SELECT temporary.id, 'abort_multipart', {eligibleAt}, 'running', {now}, 1, {lease}, {leaseUntil}
+            FROM scrapbook.storage_objects AS temporary
+            WHERE temporary.id = {objectId} AND temporary.kind = 'temporary' AND {eligibleAt} <= {now}
             ON CONFLICT (cleanup_jobs_storage_objects_id, action) DO UPDATE
-            SET state = 'completed', completed_at = EXCLUDED.completed_at, lease_token = NULL, lease_until = NULL
-            WHERE cleanup_jobs.state <> 'completed'
+            SET state = 'running', lease_token = EXCLUDED.lease_token, lease_until = EXCLUDED.lease_until,
+                attempt_count = cleanup_jobs.attempt_count + 1
+            WHERE cleanup_jobs.state IN ('pending', 'running', 'reconciling')
+                AND cleanup_jobs.eligible_at <= {now} AND cleanup_jobs.next_attempt_at <= {now}
+                AND (cleanup_jobs.lease_until IS NULL OR cleanup_jobs.lease_until <= {now})
+            """, cancellationToken));
+        return count == 1;
+    }
+
+    public Task MarkMultipartAbortedAsync(long objectId, Guid lease, DateTimeOffset completedAt, CancellationToken cancellationToken) =>
+        ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE scrapbook.cleanup_jobs
+            SET state = 'completed', next_attempt_at = {completedAt}, completed_at = {completedAt},
+                last_error_code = NULL, lease_token = NULL, lease_until = NULL
+            WHERE cleanup_jobs_storage_objects_id = {objectId} AND action = 'abort_multipart'
+                AND state = 'running' AND lease_token = {lease} AND lease_until > {completedAt}
+            """, cancellationToken));
+
+    public Task ScheduleMultipartCleanupAsync(long objectId, Guid lease, DateTimeOffset now, DateTimeOffset nextAttemptAt,
+        string errorCode, CancellationToken cancellationToken) =>
+        ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE scrapbook.cleanup_jobs
+            SET state = 'reconciling', next_attempt_at = {nextAttemptAt}, last_error_code = {errorCode},
+                lease_token = NULL, lease_until = NULL
+            WHERE cleanup_jobs_storage_objects_id = {objectId} AND action = 'abort_multipart'
+                AND state = 'running' AND lease_token = {lease} AND lease_until > {now}
             """, cancellationToken));
 
     private async Task<PhotoSubmissionEntity?> FindAsync(string sql, object[] parameters, CancellationToken cancellationToken)
