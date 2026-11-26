@@ -14,11 +14,27 @@ public sealed class SubmissionRepository(ScrapBookDbContext context) : ISubmissi
     public Task<IEventTransaction> BeginAsync(CancellationToken cancellationToken) =>
         ReadAsync<IEventTransaction>(async () => new EventTransaction(await context.Database.BeginTransactionAsync(cancellationToken)));
 
-    public async Task<EventEntity?> FindEventAsync(string code, bool forUpdate, CancellationToken cancellationToken)
+    public Task<EventEntity?> FindEventAsync(string code, bool forUpdate, CancellationToken cancellationToken)
     {
         FormattableString sql = forUpdate
             ? (FormattableString)$"SELECT event.* FROM scrapbook.events AS event WHERE event.code = {code} FOR UPDATE OF event"
             : $"SELECT event.* FROM scrapbook.events AS event WHERE event.code = {code}";
+        return ReadEventAsync(sql, cancellationToken);
+    }
+
+    public Task<EventEntity?> FindEventForShareAsync(string code, CancellationToken cancellationToken) =>
+        ReadEventAsync($"SELECT event.* FROM scrapbook.events AS event WHERE event.code = {code} FOR SHARE OF event",
+            cancellationToken);
+
+    public Task LockPhotoAttemptAsync(long eventId, Guid attemptKey, CancellationToken cancellationToken) =>
+        ReadAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
+            SELECT pg_advisory_xact_lock(hashtextextended(
+                'scrapbook.photo-submission-attempt:' || CAST({eventId} AS text) || ':' || CAST({attemptKey} AS text), 0
+            ))
+            """, cancellationToken));
+
+    private async Task<EventEntity?> ReadEventAsync(FormattableString sql, CancellationToken cancellationToken)
+    {
         var rows = await ReadAsync(() => context.Set<EventEntity>().FromSqlInterpolated(sql).AsNoTracking()
             .ToListAsync(cancellationToken));
         return rows.SingleOrDefault();

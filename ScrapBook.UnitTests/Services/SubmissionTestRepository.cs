@@ -30,6 +30,15 @@ internal sealed class SubmissionTestRepository : ISubmissionRepository
         return Task.FromResult<EventEntity?>(code == Event.Code ? Event : null);
     }
 
+    public Task<EventEntity?> FindEventForShareAsync(string code, CancellationToken cancellationToken) =>
+        FindEventAsync(code, false, cancellationToken);
+
+    public Task LockPhotoAttemptAsync(long eventId, Guid attemptKey, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
     public Task<SubmissionNoticeEntity?> FindNoticeAsync(DateTimeOffset effectiveAt, CancellationToken cancellationToken) =>
         Task.FromResult(Notice);
 
