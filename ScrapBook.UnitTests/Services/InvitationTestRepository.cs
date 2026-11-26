@@ -11,6 +11,7 @@ internal sealed class InvitationTestRepository : IInvitationRepository
     public long? MemberId { get; set; } = 32;
     public bool EmailVerified { get; set; } = true;
     public EventMemberEntity? NewMember { get; private set; }
+    public List<InvitationEntity> Closed { get; } = [];
 
     public Task<bool> IsAccountActiveAsync(long accountId, CancellationToken cancellationToken)
     {
@@ -47,7 +48,11 @@ internal sealed class InvitationTestRepository : IInvitationRepository
         return Task.CompletedTask;
     }
 
-    public Task SaveClosedAsync(InvitationEntity invitation, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task SaveClosedAsync(InvitationEntity invitation, CancellationToken cancellationToken)
+    {
+        Closed.Add(invitation);
+        return Task.CompletedTask;
+    }
 
     public Task InsertMemberAsync(EventMemberEntity member, CancellationToken cancellationToken)
     {
