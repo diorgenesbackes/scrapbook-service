@@ -1,3 +1,4 @@
+using ScrapBook.Application.Services;
 using ScrapBook.Domain.Exceptions;
 using ScrapBook.Domain.Interfaces;
 using ScrapBook.Domain.Models;
@@ -10,6 +11,7 @@ internal sealed class PhotoSubmissionStorageStub(byte[] bytes) : IPhotoSubmissio
     private readonly Dictionary<string, PhotoObjectModel> copiedObjects = [];
 
     public byte[] Bytes { get; set; } = bytes;
+    public int? CopySize { get; set; }
     public string? UnprovenVersion { get; set; }
     public bool DeleteUnavailable { get; set; }
     public List<(string Bucket, string Key, string MediaType, int Size, byte[] Hash, DateTimeOffset ExpiresAt)> Authorizations { get; } = [];
@@ -35,7 +37,8 @@ internal sealed class PhotoSubmissionStorageStub(byte[] bytes) : IPhotoSubmissio
 
     public Task<IReadOnlyList<PhotoVersionModel>> ListVersionsAsync(string bucket, string key, CancellationToken cancellationToken)
     {
-        var version = copiedObjects.TryGetValue(key, out var original) ? original.VersionId : UnprovenVersion;
+        var version = copiedObjects.GetValueOrDefault(key)?.VersionId;
+        if (key.StartsWith(PhotoSubmissionService.TemporaryPrefix, StringComparison.Ordinal)) version = UnprovenVersion;
         IReadOnlyList<PhotoVersionModel> versions = version is null ? [] : [new(version)];
         return Task.FromResult(versions);
     }
@@ -47,7 +50,7 @@ internal sealed class PhotoSubmissionStorageStub(byte[] bytes) : IPhotoSubmissio
         CancellationToken cancellationToken)
     {
         Copies.Add((sourceKey, sourceVersion, destinationKey));
-        var original = new PhotoObjectModel("original-version", Bytes.Length, DateTimeOffset.UnixEpoch, sourceVersion, null);
+        var original = new PhotoObjectModel("original-version", CopySize ?? Bytes.Length, DateTimeOffset.UnixEpoch, sourceVersion, null);
         copiedObjects[destinationKey] = original;
         return Task.FromResult(original.VersionId);
     }
