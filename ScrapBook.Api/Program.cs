@@ -103,9 +103,13 @@ builder.Services.AddScoped<SubmissionService>();
 if (photoSubmissions.Enabled)
 {
     builder.Services.AddSingleton(photoSubmissions);
-    builder.Services.AddSingleton(new PhotoSubmissionSettings(photoSubmissions.Enabled, photoSubmissions.Bucket));
-    builder.Services.AddScoped<IPhotoSubmissionRepository, PhotoSubmissionRepository>();
+    builder.Services.AddSingleton(new PhotoSubmissionSettings(photoSubmissions.Enabled, photoSubmissions.Bucket,
+        photoSubmissions.VideoEnabled));
+    builder.Services.AddScoped<PhotoSubmissionRepository>();
+    builder.Services.AddScoped<IPhotoSubmissionRepository>(services => services.GetRequiredService<PhotoSubmissionRepository>());
+    builder.Services.AddScoped<IVideoSubmissionRepository>(services => services.GetRequiredService<PhotoSubmissionRepository>());
     builder.Services.AddScoped<PhotoSubmissionService>();
+    builder.Services.AddScoped<VideoSubmissionService>();
     builder.Services.AddSingleton<IPhotoSubmissionReporter, PhotoSubmissionReporter>();
     builder.Services.AddSingleton<IPhotoSubmissionDecoder, ProcessPhotoSubmissionDecoder>();
     builder.Services.AddSingleton<IAmazonS3>(_ => new AmazonS3Client(StorageConfiguration(photoSubmissions.StorageServiceUrl)));
@@ -119,6 +123,10 @@ if (photoSubmissions.Enabled)
             ? Protocol.HTTP : Protocol.HTTPS;
         return new S3PhotoSubmissionStorage(storage, browserClient, protocol);
     });
+    builder.Services.AddSingleton<IVideoSubmissionStorage>(services =>
+        (IVideoSubmissionStorage)services.GetRequiredService<IPhotoSubmissionStorage>());
+    builder.Services.AddSingleton<IVideoSubmissionDecoder>(services =>
+        new S3VideoSubmissionDecoder(services.GetRequiredService<IAmazonS3>(), new FfprobeVideoDecoder(photoSubmissions.VideoProbePath)));
     builder.Services.AddSingleton<IAmazonSQS>(_ =>
     {
         var config = new AmazonSQSConfig();

@@ -1,15 +1,21 @@
 namespace ScrapBook.Api.Options;
 
 public sealed record PhotoSubmissionsOptions(bool Enabled, string Bucket, string QueueUrl, string Region,
-    string? StorageServiceUrl, string? QueueServiceUrl, string? BrowserStorageServiceUrl, bool ForcePathStyle)
+    string? StorageServiceUrl, string? QueueServiceUrl, string? BrowserStorageServiceUrl, bool ForcePathStyle,
+    bool VideoEnabled, string VideoProbePath)
 {
     private const string Section = "PhotoSubmissions";
+    private const string DefaultVideoProbe = "/usr/bin/ffprobe";
 
     public static PhotoSubmissionsOptions FromConfiguration(IConfiguration configuration, bool development, bool submissionsEnabled)
     {
         var section = configuration.GetSection(Section);
         if (!bool.TryParse(section["Enabled"] ?? "false", out var enabled)) throw new StartupConfigurationException(Section);
-        if (!enabled) return new(false, "", "", "", null, null, null, false);
+        if (!bool.TryParse(section["VideoEnabled"] ?? "false", out var videoEnabled) || videoEnabled && !enabled)
+        {
+            throw new StartupConfigurationException(Section + ":VideoEnabled");
+        }
+        if (!enabled) return new(false, "", "", "", null, null, null, false, false, DefaultVideoProbe);
         if (!submissionsEnabled) throw new StartupConfigurationException(Section);
         var bucket = section["Bucket"];
         if (bucket is not { Length: >= 3 and <= 63 } || !IsLetterOrDigit(bucket[0]) || !IsLetterOrDigit(bucket[^1])
@@ -30,7 +36,13 @@ public sealed record PhotoSubmissionsOptions(bool Enabled, string Bucket, string
         {
             throw new StartupConfigurationException(Section);
         }
-        return new(true, bucket, queue, region, storageEndpoint, queueEndpoint, browserEndpoint, forcePathStyle);
+        var videoProbePath = section["VideoProbePath"] ?? DefaultVideoProbe;
+        if (!Path.IsPathFullyQualified(videoProbePath) || videoEnabled && !File.Exists(videoProbePath))
+        {
+            throw new StartupConfigurationException(Section + ":VideoProbePath");
+        }
+        return new(true, bucket, queue, region, storageEndpoint, queueEndpoint, browserEndpoint, forcePathStyle,
+            videoEnabled, videoProbePath);
     }
 
     private static string? ReadEndpoint(string? value, bool development) => value is null
