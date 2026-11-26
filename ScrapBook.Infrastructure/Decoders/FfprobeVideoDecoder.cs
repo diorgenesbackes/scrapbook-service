@@ -198,6 +198,7 @@ public sealed class FfprobeVideoDecoder(string executablePath)
             var error = await errors;
             if (process.ExitCode is 137 or 152 || error.Contains("Cannot allocate memory", StringComparison.Ordinal))
                 throw new PhotoDecoderBudgetException();
+            if (process.ExitCode is 134 or 135 or 136 or 139) throw new PhotoContentInvalidException();
             if (process.ExitCode is >= 125 || error.Contains("Unrecognized option", StringComparison.Ordinal))
                 throw new PhotoDecoderUnavailableException();
             if (process.ExitCode != 0 || !string.IsNullOrWhiteSpace(error)) throw new PhotoContentInvalidException();
