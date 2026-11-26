@@ -26,13 +26,18 @@ public static class S3PhotoReceiptReader
     private static PhotoReceiptModel ReadRecord(JsonElement record)
     {
         if (record.GetProperty("eventSource").GetString() != "aws:s3"
-            || record.GetProperty("eventName").GetString() != "ObjectCreated:Put"
             || record.GetProperty("eventVersion").GetString() is not { } eventVersion
             || !eventVersion.StartsWith("2.", StringComparison.Ordinal))
         {
             throw new JsonException();
         }
 
+        var eventKind = record.GetProperty("eventName").GetString() switch
+        {
+            "ObjectCreated:Put" => "put",
+            "ObjectCreated:CompleteMultipartUpload" => "complete_multipart",
+            _ => throw new JsonException()
+        };
         var s3 = record.GetProperty("s3");
         var bucket = s3.GetProperty("bucket").GetProperty("name").GetString();
         var storageObject = s3.GetProperty("object");
@@ -48,6 +53,6 @@ public static class S3PhotoReceiptReader
         {
             throw new JsonException();
         }
-        return new PhotoReceiptModel(bucket, WebUtility.UrlDecode(key), versionId, size, receivedAt.ToUniversalTime());
+        return new PhotoReceiptModel(bucket, WebUtility.UrlDecode(key), versionId, size, receivedAt.ToUniversalTime(), eventKind);
     }
 }
