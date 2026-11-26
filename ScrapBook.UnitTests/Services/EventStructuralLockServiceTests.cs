@@ -63,6 +63,19 @@ public sealed class EventStructuralLockServiceTests
         Assert.True(events.Transaction.Disposed);
     }
 
+    [Fact]
+    public async Task VerifiesHistoricalOutboxRowsUsingTheStableMessageCorrelationAsync()
+    {
+        outbox.Origin = Origin() with { CorrelationId = Guid.Empty };
+        var body = JsonNode.Parse(Envelope())!.AsObject();
+        body["correlationId"] = MessageId.ToString("D");
+
+        Assert.Equal(EventStructuralLockResult.Applied, await Service.ConsumeAsync(body.ToJsonString(), CancellationToken.None));
+
+        Assert.Equal(MessageId, Assert.Single(locks.Claims).CorrelationId);
+        Assert.Equal(MessageId, Assert.IsType<AuditEntryEntity>(events.Audit).CorrelationId);
+    }
+
     [Theory]
     [InlineData("scheduled", "flexible")]
     [InlineData("scheduled", "scheduled_locked")]

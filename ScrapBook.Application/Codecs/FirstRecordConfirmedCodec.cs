@@ -51,11 +51,12 @@ public static class FirstRecordConfirmedCodec
                 || eventId != row.EventId || !TryReadId(payload, "recordId", out var recordId)
                 || !TryReadInstant(payload, "confirmedAt", out var confirmedAt)
                 || MicrosecondPrecision(confirmedAt) != MicrosecondPrecision(row.OccurredAt)
-                || row.MessageId == Guid.Empty || row.CorrelationId == Guid.Empty)
+                || row.MessageId == Guid.Empty)
             {
                 return null;
             }
-            return new(row.MessageId, eventId, recordId, confirmedAt, confirmedAt, row.CorrelationId);
+            var correlationId = row.CorrelationId == Guid.Empty ? row.MessageId : row.CorrelationId;
+            return new(row.MessageId, eventId, recordId, confirmedAt, confirmedAt, correlationId);
         }
         catch (Exception error) when (error is JsonException or InvalidOperationException)
         {

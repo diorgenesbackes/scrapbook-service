@@ -10,7 +10,7 @@ public sealed partial class CorrelationMiddleware(RequestDelegate next, ILogger<
     {
         var values = context.Request.Headers[HeaderName];
         var correlation = values.Count == 1 && values[0] is { Length: 36 } header
-            && Guid.TryParseExact(header, "D", out var parsed) ? parsed : Guid.NewGuid();
+            && Guid.TryParseExact(header, "D", out var parsed) && parsed != Guid.Empty ? parsed : Guid.NewGuid();
         context.Items[HeaderName] = correlation;
         context.Response.OnStarting(() =>
         {
