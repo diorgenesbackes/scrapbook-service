@@ -16,7 +16,8 @@ public sealed class ScrapBookJsonConsoleFormatter(IHostEnvironment environment) 
     [
         "operation", "requestId", "httpMethod", "route", "statusCode", "durationMs", "outcome",
         "traceId", "spanId", "correlationId", "readinessReason", "errorCode", "stage", "pendingCount",
-        "failedCount", "oldestPendingAgeSeconds"
+        "failedCount", "oldestPendingAgeSeconds", "publicationOutcomes", "consumptionOutcomes", "redeliveries",
+        "lockDurationSamples", "averageLockDurationSeconds", "maximumLockDurationSeconds", "lockDurationOverTargetCount"
     ];
 
     public override void Write<TState>(in LogEntry<TState> logEntry, IExternalScopeProvider? scopeProvider, TextWriter textWriter)

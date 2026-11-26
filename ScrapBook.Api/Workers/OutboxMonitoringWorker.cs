@@ -18,6 +18,7 @@ public sealed class OutboxMonitoringWorker(IServiceScopeFactory scopes, TimeProv
         using var timer = new PeriodicTimer(SampleInterval, clock);
         do
         {
+            LogProcessingInterval();
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
             deadline.CancelAfter(TimeSpan.FromSeconds(5));
             try
@@ -45,6 +46,18 @@ public sealed class OutboxMonitoringWorker(IServiceScopeFactory scopes, TimeProv
             }
         }
         while (await timer.WaitForNextTickAsync(stoppingToken));
+    }
+
+    private void LogProcessingInterval()
+    {
+        var interval = EventStructuralLockTelemetry.CollectInterval();
+        logger.LogInformation(new EventId(4203, "event.structural_lock.processing_interval"),
+            "Structural lock processing interval. Publications {PublicationOutcomes}, consumptions {ConsumptionOutcomes}, "
+            + "redeliveries {Redeliveries}, lock samples {LockDurationSamples}, average seconds {AverageLockDurationSeconds}, "
+            + "maximum seconds {MaximumLockDurationSeconds}, over target {LockDurationOverTargetCount}",
+            interval.PublicationOutcomes, interval.ConsumptionOutcomes, interval.Redeliveries,
+            interval.LockDurationSamples, interval.AverageLockDurationSeconds, interval.MaximumLockDurationSeconds,
+            interval.LockDurationOverTargetCount);
     }
 
     private async Task RecordBacklogAsync(EventStructuralLockMonitoringService service, DateTimeOffset now,

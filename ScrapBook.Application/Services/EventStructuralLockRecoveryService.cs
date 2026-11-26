@@ -46,19 +46,20 @@ public sealed class EventStructuralLockRecoveryService(IEventWriteRepository eve
             return EventStructuralLockRecoveryResult.Rejected;
         }
 
-        if (item.LockedAt is not null)
+        var locked = item.LockedAt is not null;
+        if (locked && (command.Mode != EventStructuralLockRecoveryMode.Publish || original.State != "failed"))
         {
             return EventStructuralLockRecoveryResult.AlreadyCompleted;
         }
-        if (processed is { State: "completed" } || (expired && command.Mode != EventStructuralLockRecoveryMode.ReconcileDlq
-            && !command.ReconcileExpired))
+        if ((!locked && processed is { State: "completed" }) || (expired
+            && command.Mode != EventStructuralLockRecoveryMode.ReconcileDlq && !command.ReconcileExpired))
         {
             return EventStructuralLockRecoveryResult.Rejected;
         }
 
         var result = command.Mode == EventStructuralLockRecoveryMode.ReconcileDlq
             ? await ReconcileDlqAsync(original, processed, message, now, cancellationToken)
-            : await ReopenAsync(command, original, processed, now, expired, cancellationToken);
+            : await ReopenAsync(command, original, processed, now, expired && !locked, cancellationToken);
         if (result is EventStructuralLockRecoveryResult.Reconciled or EventStructuralLockRecoveryResult.Reopened)
         {
             await RecordOperationAsync(command, message, result, now, cancellationToken);
@@ -109,9 +110,9 @@ public sealed class EventStructuralLockRecoveryService(IEventWriteRepository eve
             return EventStructuralLockRecoveryResult.Rejected;
         }
 
-        if (processed is not null && (rearming || expired))
+        if (processed is not null && (rearming || requiresReplayAuthorization))
         {
-            await locks.RearmAsync(processed.Id, expired ? ReplayAuthorized : null, now, cancellationToken);
+            await locks.RearmAsync(processed.Id, requiresReplayAuthorization ? ReplayAuthorized : null, now, cancellationToken);
         }
         await outbox.ReopenAsync(original.MessageId, now, cancellationToken);
         return EventStructuralLockRecoveryResult.Reopened;

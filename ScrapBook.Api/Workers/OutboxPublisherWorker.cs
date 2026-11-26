@@ -40,7 +40,7 @@ public sealed class OutboxPublisherWorker(IServiceScopeFactory scopes, ILogger<O
     {
         await using var scope = scopes.CreateAsyncScope();
         var result = await scope.ServiceProvider.GetRequiredService<OutboxPublisherService>().PublishAsync(item, cancellationToken);
-        EventStructuralLockTelemetry.RecordPublication(result.ToString());
+        EventStructuralLockTelemetry.RecordPublication(result);
         if (result == OutboxPublishResult.Failed)
         {
             logger.LogError(new EventId(4200, "event.structural_lock.failed"),

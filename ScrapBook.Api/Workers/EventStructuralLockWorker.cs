@@ -56,7 +56,7 @@ public sealed class EventStructuralLockWorker(IEventStructuralLockQueue queue, I
             result = await EvaluateAsync(delivery, true, cancellationToken);
         }
 
-        EventStructuralLockTelemetry.RecordConsumption(result?.ToString() ?? "Retry");
+        EventStructuralLockTelemetry.RecordConsumption(result);
         switch (result)
         {
             case EventStructuralLockResult.Applied:
