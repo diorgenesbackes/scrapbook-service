@@ -108,5 +108,10 @@ public sealed class InvitationRepository(ScrapBookDbContext context) : IInvitati
         {
             throw new PostgresUnavailableException(error);
         }
+        catch (PostgresException error) when (error.SqlState.StartsWith("23", StringComparison.Ordinal)
+            || error.SqlState == PostgresErrorCodes.RaiseException)
+        {
+            throw new PostgresWriteRejectedException(error);
+        }
     }
 }

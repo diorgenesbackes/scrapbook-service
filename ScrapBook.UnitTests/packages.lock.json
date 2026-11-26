@@ -51,6 +51,14 @@
           "AWSSDK.Core": "[4.1.0, 5.0.0)"
         }
       },
+      "AWSSDK.SimpleNotificationService": {
+        "type": "Transitive",
+        "resolved": "4.1.0",
+        "contentHash": "muvPr2QP4uIiQnu8eaIFXSrIvuzqiJJd4UaOjFcB/QicDJXbQFllUakD8BpXlmKqcWl70/cfw3mWIWHDTUZsfQ==",
+        "dependencies": {
+          "AWSSDK.Core": "[4.1.0, 5.0.0)"
+        }
+      },
       "AWSSDK.SQS": {
         "type": "Transitive",
         "resolved": "4.1.0",
@@ -286,6 +294,7 @@
         "dependencies": {
           "AWSSDK.S3": "[4.1.0, )",
           "AWSSDK.SQS": "[4.1.0, )",
+          "AWSSDK.SimpleNotificationService": "[4.1.0, )",
           "Magick.NET-Q8-AnyCPU": "[15.1.1, )",
           "Microsoft.EntityFrameworkCore.Relational": "[10.0.12, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",

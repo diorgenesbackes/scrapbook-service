@@ -122,5 +122,10 @@ public sealed class EventWriteRepository(ScrapBookDbContext context) : IEventWri
         {
             throw new PostgresUnavailableException(error);
         }
+        catch (PostgresException error) when (error.SqlState.StartsWith("23", StringComparison.Ordinal)
+            || error.SqlState == PostgresErrorCodes.RaiseException)
+        {
+            throw new PostgresWriteRejectedException(error);
+        }
     }
 }
