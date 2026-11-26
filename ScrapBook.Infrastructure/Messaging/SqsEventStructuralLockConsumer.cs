@@ -1,3 +1,4 @@
+using System.Globalization;
 using Amazon.Runtime;
 using Amazon.SQS;
 using Amazon.SQS.Model;
@@ -16,13 +17,18 @@ public sealed class SqsEventStructuralLockConsumer(IAmazonSQS client, string que
             QueueUrl = queueUrl,
             MaxNumberOfMessages = limit,
             WaitTimeSeconds = 10,
-            VisibilityTimeout = 30
+            MessageSystemAttributeNames = ["ApproximateReceiveCount"]
         }, cancellationToken));
-        return (response.Messages ?? []).Select(message => new EventStructuralLockDelivery(message.Body, message.ReceiptHandle)).ToArray();
+        return (response.Messages ?? []).Select(message => new EventStructuralLockDelivery(message.Body, message.ReceiptHandle,
+            ReadReceiveCount(message))).ToArray();
     }
 
     public Task AcknowledgeAsync(string receiptHandle, CancellationToken cancellationToken) =>
         ExecuteAsync(() => client.DeleteMessageAsync(queueUrl, receiptHandle, cancellationToken));
+
+    private static int ReadReceiveCount(Message message) =>
+        message.Attributes?.TryGetValue("ApproximateReceiveCount", out var value) == true
+            && int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var count) && count > 0 ? count : 0;
 
     private static async Task<T> ExecuteAsync<T>(Func<Task<T>> operation)
     {

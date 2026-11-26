@@ -17,6 +17,7 @@ using ScrapBook.Api.Formatters;
 using ScrapBook.Api.HealthChecks;
 using ScrapBook.Api.Middlewares;
 using ScrapBook.Api.Options;
+using ScrapBook.Api.Runners;
 using ScrapBook.Api.Workers;
 using ScrapBook.Api.Writers;
 using ScrapBook.Application.Services;
@@ -35,6 +36,29 @@ if (args is [ProcessPhotoSubmissionDecoder.Argument, var length])
     return int.TryParse(length, NumberStyles.None, CultureInfo.InvariantCulture, out var bytes)
         ? await PhotoDecoderRunner.RunAsync(bytes, CancellationToken.None)
         : ProcessPhotoSubmissionDecoder.InvalidContentExitCode;
+}
+
+if (args is [EventStructuralLockRecoveryRunner.Argument, .. var recoveryArguments])
+{
+    using var cancellation = new CancellationTokenSource();
+    ConsoleCancelEventHandler cancel = (_, eventArgs) =>
+    {
+        eventArgs.Cancel = true;
+        cancellation.Cancel();
+    };
+    Console.CancelKeyPress += cancel;
+    try
+    {
+        return await EventStructuralLockRecoveryRunner.RunAsync(recoveryArguments, cancellation.Token);
+    }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+        return 130;
+    }
+    finally
+    {
+        Console.CancelKeyPress -= cancel;
+    }
 }
 
 var builder = WebApplication.CreateBuilder(args);
@@ -160,6 +184,7 @@ if (eventStructuralLock.Enabled)
     builder.Services.AddScoped<IEventStructuralLockRepository, EventStructuralLockRepository>();
     builder.Services.AddScoped<OutboxPublisherService>();
     builder.Services.AddScoped<EventStructuralLockService>();
+    builder.Services.AddScoped<EventStructuralLockMonitoringService>();
     builder.Services.AddSingleton<IAmazonSimpleNotificationService>(_ =>
         new AmazonSimpleNotificationServiceClient(MessagingConfiguration(new AmazonSimpleNotificationServiceConfig(),
             eventStructuralLock.SnsServiceUrl)));
@@ -170,6 +195,7 @@ if (eventStructuralLock.Enabled)
     builder.Services.AddSingleton<IEventStructuralLockQueue>(services => new SqsEventStructuralLockConsumer(
         services.GetRequiredKeyedService<IAmazonSQS>(EventStructuralLockOptions.SectionName), eventStructuralLock.QueueUrl));
     builder.Services.AddHostedService<OutboxPublisherWorker>();
+    builder.Services.AddHostedService<OutboxMonitoringWorker>();
     builder.Services.AddHostedService<EventStructuralLockWorker>();
 }
 builder.Services.AddSingleton<IInvitationTokenCodec>(new InvitationTokenCodec(

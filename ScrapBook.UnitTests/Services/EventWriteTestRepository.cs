@@ -9,10 +9,12 @@ internal sealed class EventWriteTestRepository : IEventWriteRepository
     public AuditEntryEntity? Audit { get; private set; }
     public EventWriteTestTransaction Transaction { get; private set; } = new();
     public bool FailAudit { get; set; }
+    public Func<CancellationToken, Task>? BeforeCommitAsync { get; set; }
 
     public Task<IEventTransaction> BeginAsync(CancellationToken cancellationToken)
     {
-        Transaction = new EventWriteTestTransaction();
+        cancellationToken.ThrowIfCancellationRequested();
+        Transaction = new EventWriteTestTransaction { BeforeCommitAsync = BeforeCommitAsync };
         return Task.FromResult<IEventTransaction>(Transaction);
     }
 

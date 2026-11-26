@@ -31,14 +31,57 @@ public sealed class EventStructuralLockRepository(ScrapBookDbContext context) : 
             ON CONFLICT (consumer, source, message_id) WHERE message_id IS NOT NULL DO NOTHING
             """, cancellationToken));
 
+        return (await FindForUpdateAsync(consumer, source, messageId, cancellationToken))!;
+    }
+
+    public async Task<ProcessedMessageEntity?> FindForUpdateAsync(string consumer, string source, Guid messageId,
+        CancellationToken cancellationToken)
+    {
         var rows = await ExecuteAsync(() => context.Database.SqlQuery<ProcessedMessageEntity>($"""
-            SELECT id AS "Id", payload_hash AS "PayloadHash", state AS "State"
+            SELECT id AS "Id", payload_hash AS "PayloadHash", state AS "State", error_code AS "ErrorCode"
             FROM scrapbook.processed_messages
             WHERE consumer = {consumer} AND source = {source} AND message_id = {messageId}
             FOR UPDATE
             """).ToListAsync(cancellationToken));
-        return rows.Single();
+        return rows.SingleOrDefault();
     }
+
+    public Task QuarantineAsync(long id, string errorCode, DateTimeOffset now, CancellationToken cancellationToken) =>
+        ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE scrapbook.processed_messages
+            SET state = 'quarantined', error_code = {errorCode}, updated_at = {now}, lease_token = NULL, lease_until = NULL
+            WHERE id = {id}
+            """, cancellationToken));
+
+    public Task RearmAsync(long id, string? errorCode, DateTimeOffset now, CancellationToken cancellationToken) =>
+        ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE scrapbook.processed_messages
+            SET state = 'processing', error_code = {errorCode}, completed_at = NULL, updated_at = {now},
+                attempt_count = 0, lease_token = NULL, lease_until = NULL
+            WHERE id = {id}
+            """, cancellationToken));
+
+    public Task<bool> HasUnmatchedConfirmationsAsync(string type, short version, CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            var rows = await context.Database.SqlQuery<bool>($"""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM scrapbook.events AS event
+                    WHERE event.locked_at IS NULL
+                        AND EXISTS (
+                            SELECT 1 FROM scrapbook.records AS record
+                            WHERE record.records_events_id = event.id AND record.confirmed_at IS NOT NULL
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1 FROM scrapbook.outbox_messages AS fact
+                            WHERE fact.type = {type} AND fact.protocol_version = {version}
+                                AND fact.aggregate_type = 'event' AND fact.aggregate_id = event.id
+                        )
+                ) AS "Value"
+                """).ToListAsync(cancellationToken);
+            return rows.Single();
+        });
 
     public Task CompleteAsync(long id, DateTimeOffset completedAt, CancellationToken cancellationToken) =>
         ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
