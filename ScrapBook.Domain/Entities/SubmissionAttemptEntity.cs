@@ -2,6 +2,10 @@ namespace ScrapBook.Domain.Entities;
 
 public sealed class SubmissionAttemptEntity
 {
+    public long RecordId { get; init; }
+    public string? Format { get; init; }
+    public DateTime? CompletionDeadlineAt { get; init; }
+    public string? ResultCode { get; init; }
     public required string State { get; init; }
     public DateTime? ConfirmedAt { get; init; }
     public string? HashKeyId { get; init; }

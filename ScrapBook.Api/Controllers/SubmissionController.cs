@@ -64,6 +64,37 @@ public sealed class SubmissionController(SubmissionService submissions, TimeProv
         return submissions.GetAsync(code, key, secret, cancellationToken);
     }
 
+    [HttpPost("submissions/{attemptKey}/files/{fileKey}/upload-authorizations")]
+    [RequestSizeLimit(1024)]
+    public async Task<PhotoUploadAuthorizationResponse> AuthorizePhotoAsync(string code, string attemptKey, string fileKey,
+        CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        if (!TryReadKey(attemptKey, out var key) || !TryReadKey(fileKey, out var file))
+        {
+            throw new SubmissionAttemptNotFoundException();
+        }
+        var secret = ReadSecret() ?? throw new SubmissionAttemptNotFoundException();
+        await HttpJsonBodyReader.ReadAsync<PhotoSubmissionActionRequest>(Request, cancellationToken);
+        return await submissions.AuthorizePhotoAsync(code, key, file, secret, cancellationToken);
+    }
+
+    [HttpPost("submissions/{attemptKey}/completion")]
+    [RequestSizeLimit(1024)]
+    public async Task<ActionResult<SubmissionStatusResponse>> CompletePhotoAsync(string code, string attemptKey,
+        CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        if (!TryReadKey(attemptKey, out var key))
+        {
+            throw new SubmissionAttemptNotFoundException();
+        }
+        var secret = ReadSecret() ?? throw new SubmissionAttemptNotFoundException();
+        await HttpJsonBodyReader.ReadAsync<PhotoSubmissionActionRequest>(Request, cancellationToken);
+        var status = await submissions.SignalPhotoCompletionAsync(code, key, secret, cancellationToken);
+        return status.State is "confirmed" or "expired" or "rejected" ? Ok(status) : Accepted(status);
+    }
+
     private byte[]? ReadSecret()
     {
         var values = Request.Headers.Authorization;

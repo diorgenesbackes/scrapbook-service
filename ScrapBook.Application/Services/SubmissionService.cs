@@ -7,15 +7,17 @@ using ScrapBook.Domain.Commands;
 using ScrapBook.Domain.Entities;
 using ScrapBook.Domain.Exceptions;
 using ScrapBook.Domain.Interfaces;
+using ScrapBook.Domain.Models;
 using ScrapBook.Domain.Requests;
 using ScrapBook.Domain.Responses;
 
 namespace ScrapBook.Application.Services;
 
-public sealed class SubmissionService(ISubmissionRepository repository, ISubmissionProtectionCodec protection, TimeProvider clock)
+public sealed class SubmissionService(ISubmissionRepository repository, ISubmissionProtectionCodec protection, TimeProvider clock,
+    PhotoSubmissionService? photos = null)
 {
     private const string Operation = "contribution.create";
-    private const string FirstConfirmation = "event.first-record-confirmed.v1";
+    internal const string FirstConfirmation = "event.first-record-confirmed.v1";
     private static readonly TimeSpan ConsentLifetime = TimeSpan.FromMinutes(30);
 
     public async Task<SubmissionNoticeResponse> GetNoticeAsync(string code, CancellationToken cancellationToken)
@@ -45,13 +47,36 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
 
     public async Task<SubmissionStatusResponse> GetAsync(string code, Guid attemptKey, byte[] secret, CancellationToken cancellationToken)
     {
+        var attempt = await FindAuthorizedAttemptAsync(code, attemptKey, secret, cancellationToken);
+        return Represent(attempt);
+    }
+
+    public async Task<PhotoUploadAuthorizationResponse> AuthorizePhotoAsync(string code, Guid attemptKey, Guid fileKey,
+        byte[] secret, CancellationToken cancellationToken)
+    {
+        var attempt = await FindAuthorizedAttemptAsync(code, attemptKey, secret, cancellationToken);
+        if (attempt.Format != "photo") throw new SubmissionAttemptNotFoundException();
+        return await RequirePhotoService().AuthorizeAsync(attempt.RecordId, fileKey, attempt.AuthorizationExpiresAt, cancellationToken);
+    }
+
+    public async Task<SubmissionStatusResponse> SignalPhotoCompletionAsync(string code, Guid attemptKey, byte[] secret,
+        CancellationToken cancellationToken)
+    {
+        var attempt = await FindAuthorizedAttemptAsync(code, attemptKey, secret, cancellationToken);
+        if (attempt.Format != "photo") throw new SubmissionAttemptNotFoundException();
+        return Represent(attempt);
+    }
+
+    private async Task<SubmissionAttemptEntity> FindAuthorizedAttemptAsync(string code, Guid attemptKey, byte[] secret,
+        CancellationToken cancellationToken)
+    {
         RequireEnabled();
         if (!IsCode(code)) throw new SubmissionAttemptNotFoundException();
         var item = await repository.FindEventAsync(code, false, cancellationToken) ?? throw new SubmissionAttemptNotFoundException();
         var attempt = await repository.FindAttemptAsync(item.Id, Operation, attemptKey, cancellationToken)
             ?? throw new SubmissionAttemptNotFoundException();
         AuthorizeAttempt(item.Id, attemptKey, secret, attempt, clock.GetUtcNow());
-        return Represent(attempt);
+        return attempt;
     }
 
     public async Task<CreateSubmissionResponse> CreateAsync(string code, Guid attemptKey, byte[] secret,
@@ -60,17 +85,18 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
     {
         var keyId = RequireEnabled();
         ValidateCode(code);
-        var identification = request.Identification ?? throw new SubmissionConsentRequiredException();
-        var name = NormalizeName(identification.GuestName, "identification.guestName");
-        var text = NormalizeText(request);
-
         await using var transaction = await repository.BeginAsync(cancellationToken);
         var item = await FindEventAsync(code, true, cancellationToken);
         var existing = await repository.FindAttemptAsync(item.Id, Operation, attemptKey, cancellationToken);
+        if (existing is not null) AuthorizeAttempt(item.Id, attemptKey, secret, existing, ingress);
+
+        var identification = request.Identification ?? throw new SubmissionConsentRequiredException();
+        var name = NormalizeName(identification.GuestName, "identification.guestName");
+        if (request.Category != "testimonial") throw new EventRequestValidationException("category");
+        var (text, caption, file, canonicalPayload) = NormalizePayload(request);
         if (existing is not null)
         {
-            AuthorizeAttempt(item.Id, attemptKey, secret, existing, ingress);
-            var hash = protection.HashPayload(existing.HashKeyId!, item.Id, identification.NoticeCode ?? "", name, text);
+            var hash = protection.HashPayload(existing.HashKeyId!, item.Id, identification.NoticeCode ?? "", name, canonicalPayload);
             if (!Matches(existing.PayloadHash, hash))
             {
                 throw new SubmissionKeyReusedException();
@@ -79,21 +105,30 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         }
 
         EnsureWindow(item, ingress);
-        if (receivedAt > EventOpeningService.ToBrasiliaInstant(item.CompletionDeadlineAt))
+        if (file is null && receivedAt > EventOpeningService.ToBrasiliaInstant(item.CompletionDeadlineAt))
         {
             throw new SubmissionDeadlineExceededException();
         }
 
         var notice = await FindNoticeAsync(ingress, cancellationToken);
         var consentedAt = RequireConsent(identification, item.Id, notice, name, ingress);
+        if (file is not null)
+        {
+            var status = await RequirePhotoService().AdmitAsync(item, notice.Id, name, caption, file, consentedAt, ingress,
+                Operation, attemptKey, keyId, protection.HashPayload(keyId, item.Id, notice.Code, name, canonicalPayload)!,
+                protection.HashAuthorization(keyId, item.Id, attemptKey, secret)!, correlationId, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return new CreateSubmissionResponse(true, status);
+        }
+
         var committedAt = clock.GetUtcNow();
         if (receivedAt < ingress) receivedAt = ingress;
         if (committedAt < receivedAt) committedAt = receivedAt;
         committedAt = new DateTimeOffset(committedAt.UtcTicks - committedAt.UtcTicks % 10, TimeSpan.Zero);
-        var command = new ConfirmTextSubmissionCommand(item.Id, notice.Id, name, text,
+        var command = new ConfirmTextSubmissionCommand(item.Id, notice.Id, name, text!,
             Civil(consentedAt), Civil(ingress), Civil(receivedAt), Civil(committedAt),
             item.SubmissionOpensAt, item.SubmissionClosesAt, item.CompletionDeadlineAt,
-            attemptKey, Operation, keyId, protection.HashPayload(keyId, item.Id, notice.Code, name, text)!,
+            attemptKey, Operation, keyId, protection.HashPayload(keyId, item.Id, notice.Code, name, canonicalPayload)!,
             protection.HashAuthorization(keyId, item.Id, attemptKey, secret)!, ingress.AddDays(30), committedAt);
 
         var messageId = FirstMessageId(item.Id);
@@ -101,14 +136,7 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         var recordId = await repository.InsertConfirmedTextAsync(command, cancellationToken);
         if (first)
         {
-            var payload = JsonSerializer.Serialize(new
-            {
-                eventId = item.Id.ToString(CultureInfo.InvariantCulture),
-                recordId = recordId.ToString(CultureInfo.InvariantCulture),
-                confirmedAt = committedAt
-            });
-            await repository.InsertOutboxAsync(
-                new SubmissionOutboxEntity(messageId, FirstConfirmation, item.Id, payload, correlationId, committedAt),
+            await repository.InsertOutboxAsync(FirstConfirmationMessage(item.Id, recordId, correlationId, committedAt),
                 cancellationToken);
         }
 
@@ -184,21 +212,30 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         return result;
     }
 
-    private static string NormalizeText(CreateSubmissionRequest request)
+    private static (string? Text, string? Caption, PhotoManifestModel? File, string CanonicalPayload) NormalizePayload(
+        CreateSubmissionRequest request)
     {
-        if (request.Category != "testimonial") throw new EventRequestValidationException("category");
+        if (request.Format == "photo")
+        {
+            return PhotoSubmissionService.NormalizePayload(request);
+        }
         if (request.Format != "text") throw new EventRequestValidationException("format");
-        var text = request.Text?.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n')
-            ?? throw new EventRequestValidationException("text");
+        if (request.Caption is not null || request.Files is not null) throw new EventRequestValidationException("format");
+        var text = NormalizeLineEndings(request.Text) ?? throw new EventRequestValidationException("text");
         EnsureText(text, 5000, "text");
-        return text;
+        return (text, null, null, text);
     }
+
+    private PhotoSubmissionService RequirePhotoService() => photos ?? throw new PhotoSubmissionDisabledException();
+
+    internal static string? NormalizeLineEndings(string? text) =>
+        text?.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
 
     private static bool IsGuestSpace(char value) => value == '\uFEFF' || value != '\u0085' && char.IsWhiteSpace(value);
 
-    private static void EnsureText(string value, int limit, string field)
+    internal static void EnsureText(string value, int limit, string field, bool requireContent = true)
     {
-        if (value.All(IsGuestSpace)) throw new EventRequestValidationException(field);
+        if (requireContent && value.All(IsGuestSpace)) throw new EventRequestValidationException(field);
         var span = value.AsSpan();
         var count = 0;
         while (!span.IsEmpty)
@@ -214,13 +251,33 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
     private static bool Matches(byte[]? expected, byte[]? actual) =>
         expected is not null && actual is not null && CryptographicOperations.FixedTimeEquals(expected, actual);
 
-    private static DateTime Civil(DateTimeOffset instant) =>
+    internal static DateTime Civil(DateTimeOffset instant) =>
         TimeZoneInfo.ConvertTime(instant, EventOpeningService.Zone).DateTime;
 
-    private static Guid FirstMessageId(long eventId) => new(
+    internal static Guid FirstMessageId(long eventId) => new(
         SHA256.HashData(Encoding.UTF8.GetBytes(FirstConfirmation + ":" + eventId.ToString(CultureInfo.InvariantCulture))).AsSpan(0, 16));
 
-    private static SubmissionStatusResponse Represent(SubmissionAttemptEntity attempt) =>
-        new(attempt.State, EventOpeningService.ToBrasiliaInstant(attempt.ConfirmedAt ??
-            throw new SubmissionAttemptNotFoundException()).ToUniversalTime());
+    internal static SubmissionOutboxEntity FirstConfirmationMessage(long eventId, long recordId, Guid correlationId,
+        DateTimeOffset confirmedAt)
+    {
+        var payload = JsonSerializer.Serialize(new
+        {
+            eventId = eventId.ToString(CultureInfo.InvariantCulture),
+            recordId = recordId.ToString(CultureInfo.InvariantCulture),
+            confirmedAt
+        });
+        return new SubmissionOutboxEntity(FirstMessageId(eventId), FirstConfirmation, eventId, payload, correlationId, confirmedAt);
+    }
+
+    private static SubmissionStatusResponse Represent(SubmissionAttemptEntity attempt)
+    {
+        if (attempt.ConfirmedAt is { } confirmedAt)
+        {
+            return new SubmissionStatusResponse("confirmed", EventOpeningService.ToBrasiliaInstant(confirmedAt).ToUniversalTime());
+        }
+        var deadline = attempt.CompletionDeadlineAt is { } completionDeadline && attempt.State == "receiving"
+            ? EventOpeningService.ToBrasiliaInstant(completionDeadline).ToUniversalTime()
+            : (DateTimeOffset?)null;
+        return new SubmissionStatusResponse(attempt.State, CompletionDeadlineAt: deadline, Code: attempt.ResultCode);
+    }
 }
