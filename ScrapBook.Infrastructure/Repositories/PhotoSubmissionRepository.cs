@@ -295,11 +295,12 @@ public sealed class PhotoSubmissionRepository(ScrapBookDbContext context) : IPho
         var count = await ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
             WITH updated_file AS (
                 UPDATE scrapbook.files
-                SET actual_size = {file.Original.Size}, media_type = {file.Image?.MediaType ?? file.Video?.MediaType},
-                    container = {file.Image?.Container ?? file.Video?.Container},
+                SET actual_size = {file.Original.Size}, media_type = {file.Image?.MediaType ?? file.Video?.MediaType ?? file.Audio?.MediaType},
+                    container = {file.Image?.Container ?? file.Video?.Container ?? file.Audio?.Container},
                     width = {file.Image?.Width ?? file.Video?.Width}, height = {file.Image?.Height ?? file.Video?.Height},
                     orientation = {file.Image?.Orientation}, rotation = {(short?)file.Video?.Rotation},
-                    video_codec = {file.Video?.VideoCodec}, audio_codec = {file.Video?.AudioCodec}, duration = {file.Video?.Duration},
+                    video_codec = {file.Video?.VideoCodec}, audio_codec = {file.Video?.AudioCodec ?? file.Audio?.AudioCodec},
+                    duration = {file.Video?.Duration ?? file.Audio?.Duration},
                     frame_rate_numerator = {file.Video?.FrameRateNumerator}, frame_rate_denominator = {file.Video?.FrameRateDenominator},
                     validation_state = 'valid', processing_state = 'pending',
                     received_at = {Civil("file_received", file.ReceivedAt)}, validated_at = {committedAt},

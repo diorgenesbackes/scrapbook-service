@@ -78,7 +78,7 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         CancellationToken cancellationToken)
     {
         var attempt = await FindAuthorizedAttemptAsync(code, attemptKey, secret, cancellationToken);
-        if (attempt.Format is not ("photo" or "video")) throw new SubmissionAttemptNotFoundException();
+        if (attempt.Format is not ("photo" or "video" or "audio")) throw new SubmissionAttemptNotFoundException();
         if (attempt.Format == "video" && attempt.State == "receiving")
         {
             await RequireMediaService(attempt.Format).SignalVideoCompletionAsync(attempt.RecordId, cancellationToken);
@@ -106,7 +106,7 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         var keyId = RequireEnabled();
         ValidateCode(code);
         await using var transaction = await repository.BeginAsync(cancellationToken);
-        var isMedia = request.Format is "photo" or "video";
+        var isMedia = request.Format is "photo" or "video" or "audio";
         var item = isMedia
             ? await repository.FindEventForShareAsync(code, cancellationToken) ?? throw new PublicEventNotFoundException()
             : await FindEventAsync(code, true, cancellationToken);
@@ -244,7 +244,7 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
     private static (string? Text, string? Caption, IReadOnlyList<PhotoManifestModel>? Files, string CanonicalPayload) NormalizePayload(
         CreateSubmissionRequest request)
     {
-        if (request.Format is "photo" or "video")
+        if (request.Format is "photo" or "video" or "audio")
         {
             return PhotoSubmissionService.NormalizePayload(request);
         }
@@ -259,6 +259,7 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
     {
         "photo" => photos ?? throw new PhotoSubmissionDisabledException(),
         "video" => photos ?? throw new VideoSubmissionDisabledException(),
+        "audio" => photos ?? throw new AudioSubmissionDisabledException(),
         _ => throw new SubmissionAttemptNotFoundException()
     };
 
@@ -312,7 +313,7 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         var deadline = attempt.CompletionDeadlineAt is { } completionDeadline && attempt.State == "receiving"
             ? EventOpeningService.ToBrasiliaInstant(completionDeadline).ToUniversalTime()
             : (DateTimeOffset?)null;
-        if ((attempt.Category == "moment" || attempt.Format == "video") && deadline is { } cutoff && clock.GetUtcNow() >= cutoff)
+        if ((attempt.Category == "moment" || attempt.Format is "video" or "audio") && deadline is { } cutoff && clock.GetUtcNow() >= cutoff)
         {
             return new SubmissionStatusResponse("reconciling");
         }

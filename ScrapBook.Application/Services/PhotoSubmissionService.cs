@@ -14,11 +14,12 @@ namespace ScrapBook.Application.Services;
 
 public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, ISubmissionRepository submissions,
     IPhotoSubmissionStorage storage, IPhotoSubmissionDecoder decoder, PhotoSubmissionSettings settings, TimeProvider clock,
-    IPhotoSubmissionReporter? reporter = null, VideoSubmissionService? video = null)
+    IPhotoSubmissionReporter? reporter = null, VideoSubmissionService? video = null, AudioSubmissionService? audio = null)
 {
     public const string TemporaryPrefix = "submissions/temporary/";
     private const string OriginalPrefix = "submissions/original/";
     private const string MediaConfirmation = "record.media-confirmed.v1";
+    private const string PutReceipt = "put";
     private const int MaximumSize = 20_000_000;
     private static readonly TimeSpan CleanupDelay = TimeSpan.FromHours(24);
     private static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(5);
@@ -29,8 +30,11 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
         CreateSubmissionRequest request)
     {
         if (request.Text is not null) throw new EventRequestValidationException("text");
-        var isVideo = request.Format == "video";
-        var maximumFiles = request.Category == "moment" && !isVideo ? 10 : 1;
+        if (request.Format == "audio" && request.Category != "testimonial")
+        {
+            throw new EventRequestValidationException("format");
+        }
+        var maximumFiles = request.Category == "moment" && request.Format == "photo" ? 10 : 1;
         if (request.Files is not { Count: > 0 } files || files.Count > maximumFiles)
         {
             throw new EventRequestValidationException("files");
@@ -44,7 +48,12 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
             {
                 throw new EventRequestValidationException("files");
             }
-            manifests.Add(isVideo ? VideoSubmissionService.NormalizeFile(file) : NormalizeFile(file, index));
+            manifests.Add(request.Format switch
+            {
+                "video" => VideoSubmissionService.NormalizeFile(file),
+                "audio" => AudioSubmissionService.NormalizeFile(file),
+                _ => NormalizeFile(file, index)
+            });
         }
 
         var caption = SubmissionService.NormalizeLineEndings(request.Caption);
@@ -87,6 +96,7 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
         CancellationToken cancellationToken)
     {
         if (format == "video") RequireVideoEnabled();
+        if (format == "audio") RequireAudioEnabled();
         var intents = files.Select(CreateIntent).ToArray();
         var command = new CreatePhotoSubmissionCommand(item, noticeId, category, name, caption, intents,
             SubmissionService.Civil(consentedAt), SubmissionService.Civil(ingress), operation, attemptKey, keyId, payloadHash,
@@ -117,9 +127,11 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
         if (submission.State != "receiving" || submission.TemporaryVersion is not null)
         {
             if (submission.Format == "video") throw new VideoUploadUnavailableException();
+            if (submission.Format == "audio") throw new AudioUploadUnavailableException();
             throw new PhotoUploadUnavailableException();
         }
         if (submission.Format == "video") RequireVideoEnabled();
+        if (submission.Format == "audio") RequireAudioEnabled();
         if (credentialExpiry < expiresAt) expiresAt = credentialExpiry;
         var shortExpiry = now.Add(AuthorizationLifetime);
         if (shortExpiry < expiresAt) expiresAt = shortExpiry;
@@ -159,6 +171,13 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
         if (!settings.VideoEnabled) throw new VideoSubmissionDisabledException();
     }
 
+    private void RequireAudioEnabled()
+    {
+        if (!settings.AudioEnabled) throw new AudioSubmissionDisabledException();
+    }
+
+    private AudioSubmissionService RequireAudioService() => audio ?? throw new PhotoDecoderUnavailableException();
+
     private VideoSubmissionService RequireVideoService() => video ?? throw new VideoSubmissionDisabledException();
 
     public async Task RecordReceiptAsync(PhotoReceiptModel receipt, CancellationToken cancellationToken)
@@ -169,7 +188,7 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
         if (submission is null) return;
         var now = clock.GetUtcNow();
         await photos.StoreReceiptAsync(submission.TemporaryObjectId, receipt, receipt.ReceivedAt.Add(CleanupDelay), cancellationToken);
-        var kind = submission.PartSha256 is null ? "put" : "complete_multipart";
+        var kind = submission.PartSha256 is null ? PutReceipt : "complete_multipart";
         if (submission.State == "receiving" && submission.TemporaryVersion is null && receipt.EventKind == kind
             && receipt.ReceivedAt >= Deadline(submission.StartedAt)
             && receipt.ReceivedAt <= Deadline(submission.CompletionDeadlineAt))
@@ -257,21 +276,35 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
             {
                 if (!await photos.HasReceiptAsync(file.TemporaryObjectId, version.VersionId, cancellationToken))
                 {
-                    await photos.ScheduleAsync(submission.SessionId, lease, clock.GetUtcNow().AddHours(1),
-                        $"{submission.Format}-receipt-missing", cancellationToken);
-                    reporter?.ReportMissingReceipt(submission.CorrelationId);
+                    var code = $"{submission.Format}-receipt-missing";
+                    await photos.ScheduleAsync(submission.SessionId, lease, clock.GetUtcNow().AddHours(1), code,
+                        cancellationToken);
+                    reporter?.ReportMissingReceipt(code, submission.CorrelationId);
                     return;
                 }
-                if (videoService is not null && await videoService.IsLateReceiptAsync(file, version.VersionId, cancellationToken))
+                if (await IsLateReceiptAsync(file, version.VersionId, videoService, cancellationToken))
                 {
                     late = true;
                 }
             }
         }
 
-        const string expired = "submission-deadline-exceeded";
-        await photos.TerminateAsync(submission, lease, late ? "rejected" : "expired", expired,
-            missing.ToDictionary(file => file.FileId, _ => expired), clock.GetUtcNow(), cancellationToken);
+        var resultCode = late && submission.Format == "audio" ? "audio-received-late" : "submission-deadline-exceeded";
+        await photos.TerminateAsync(submission, lease, late ? "rejected" : "expired", resultCode,
+            missing.ToDictionary(file => file.FileId, _ => resultCode), clock.GetUtcNow(), cancellationToken);
+    }
+
+    private async Task<bool> IsLateReceiptAsync(PhotoSubmissionEntity file, string version, VideoSubmissionService? videoService,
+        CancellationToken cancellationToken)
+    {
+        if (videoService is not null)
+        {
+            return await videoService.IsLateReceiptAsync(file, version, cancellationToken);
+        }
+        if (file.Format != "audio") return false;
+
+        var receivedAt = await photos.FindReceiptAtAsync(file.TemporaryObjectId, version, PutReceipt, cancellationToken);
+        return receivedAt >= Deadline(file.CompletionDeadlineAt);
     }
 
     private async Task ValidateAndConfirmAsync(PhotoSubmissionEntity submission, Guid lease,
@@ -316,7 +349,7 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
         {
             var original = await PreserveAsync(file.File, file.Version, file.MediaType, cancellationToken);
             originals.Add(new ConfirmPhotoFileModel(file.File, file.Image, original, SubmissionService.Civil(file.ReceivedAt),
-                file.Video));
+                file.Video, file.Audio));
         }
 
         await ConfirmAsync(submission, lease, validated.Max(file => file.ReceivedAt), originals, cancellationToken);
@@ -329,6 +362,12 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
         {
             var metadata = await RequireVideoService().ValidateAsync(file, version, cancellationToken);
             return new ValidatedSubmissionFileModel(file, version, receivedAt, metadata.MediaType, null, metadata);
+        }
+
+        if (file.Format == "audio")
+        {
+            var metadata = await RequireAudioService().ValidateAsync(file, version, cancellationToken);
+            return new ValidatedSubmissionFileModel(file, version, receivedAt, metadata.MediaType, null, null, metadata);
         }
 
         var bytes = await storage.ReadAsync(file.Bucket, file.TemporaryKey, version, file.DeclaredSize, cancellationToken);
@@ -377,6 +416,12 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
             if (submission.Format == "video")
             {
                 await RequireVideoService().VerifyOriginalAsync(submission, version, cancellationToken);
+                return original;
+            }
+
+            if (submission.Format == "audio")
+            {
+                await RequireAudioService().VerifyOriginalAsync(submission, version, cancellationToken);
                 return original;
             }
 
