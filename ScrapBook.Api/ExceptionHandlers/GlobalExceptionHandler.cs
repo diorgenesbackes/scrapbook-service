@@ -27,7 +27,7 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
             Type = "about:blank",
             Title = title,
             Status = status,
-            Detail = status >= 500 && exception is not PhotoSubmissionDisabledException
+            Detail = status >= 500 && exception is not (PhotoSubmissionDisabledException or VideoSubmissionDisabledException)
                 ? "Ocorreu uma falha temporária." : title
         };
         if (exception is EventRequestValidationException validation)
@@ -70,6 +70,8 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
         SubmissionWindowException window => (409, "UPLOAD_WINDOW_CLOSED", window.WindowState == "before"
             ? "Novos envios ainda não estão disponíveis." : "O prazo para novos envios terminou."),
         PhotoSubmissionDisabledException => (503, "PHOTO_SUBMISSION_DISABLED", "O envio de fotos está indisponível."),
+        VideoSubmissionDisabledException => (503, "VIDEO_SUBMISSION_DISABLED", "O envio de vídeos está indisponível."),
+        VideoUploadUnavailableException => (409, "UPLOAD_NOT_AVAILABLE", "O envio do vídeo está indisponível nesta tentativa."),
         PhotoUploadUnavailableException => (409, "UPLOAD_NOT_AVAILABLE", "O envio da foto está indisponível nesta tentativa."),
         SubmissionConsentRequiredException => (409, "SUBMISSION_CONSENT_REQUIRED", "Confirme o aviso para continuar."),
         SubmissionDeadlineExceededException => (409, "UPLOAD_COMPLETION_DEADLINE_EXCEEDED", "O prazo para concluir este envio terminou."),
