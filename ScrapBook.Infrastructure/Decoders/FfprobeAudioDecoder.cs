@@ -8,7 +8,7 @@ namespace ScrapBook.Infrastructure.Decoders;
 public sealed class FfprobeAudioDecoder(string executablePath)
 {
     private const int MaximumMetadataOutput = 24 * 1024;
-    private const int MaximumFrameLines = 250_000;
+    private const int MaximumMediaLines = 500_000;
     private static readonly TimeSpan DecodeTimeout = TimeSpan.FromSeconds(30);
     private static readonly HashSet<string> IsoBrands = new(StringComparer.Ordinal)
     {
@@ -28,6 +28,7 @@ public sealed class FfprobeAudioDecoder(string executablePath)
             using var json = JsonDocument.Parse(metadata, new JsonDocumentOptions { MaxDepth = 10 });
             var (mediaType, container) = Container(json.RootElement.GetProperty("format"), webm);
             var tracks = AudioTracks(json.RootElement.GetProperty("streams"), container);
+            if (container == "ogg") await OggPageReader.RequireCompleteAsync(path, budget.Token);
             if (!await ReadFramesAsync(path, container, tracks, budget.Token))
                 throw new PhotoContentInvalidException();
             await VerifyDecodeAsync(path, container, budget.Token);
@@ -61,11 +62,14 @@ public sealed class FfprobeAudioDecoder(string executablePath)
         CancellationToken cancellationToken)
     {
         var input = AudioDecoderProcess.InputOptions(FormatWhitelist(container), container == "m4a");
-        string[] options = ["-select_streams", "a", "-show_frames", "-show_entries",
-            "frame=stream_index,best_effort_timestamp,nb_samples:frame_side_data=", "-output_format",
-            "compact=p=1:nk=0", "-i", path];
+        var mp3 = container == "mp3";
+        string[] packetOptions = mp3 ? ["-show_packets"] : [];
+        const string frameEntries = "frame=stream_index,best_effort_timestamp,nb_samples:frame_side_data=";
+        var entries = mp3 ? frameEntries + ":packet=pos,size,flags:packet_side_data=" : frameEntries;
+        string[] options = ["-select_streams", "a", "-show_frames", .. packetOptions, "-show_entries", entries,
+            "-output_format", "compact=p=1:nk=0", "-i", path];
         return AudioDecoderProcess.RunAsync(executablePath, path, [.. input, .. options],
-            (reader, token) => CaptureFramesAsync(reader, tracks, token), cancellationToken);
+            (reader, token) => CaptureFramesAsync(reader, tracks, mp3 ? path : null, token), cancellationToken);
     }
 
     private Task<string> VerifyDecodeAsync(string path, string container, CancellationToken cancellationToken)
@@ -151,16 +155,37 @@ public sealed class FfprobeAudioDecoder(string executablePath)
         && codec.All(character => char.IsAsciiLetterOrDigit(character) || character == '_');
 
     private static async Task<bool> CaptureFramesAsync(StreamReader reader, Dictionary<int, AudioTrackTimingModel> tracks,
-        CancellationToken cancellationToken)
+        string? mp3Path, CancellationToken cancellationToken)
     {
+        await using var mp3 = mp3Path is null ? null : new FileStream(mp3Path, FileMode.Open, FileAccess.Read,
+            FileShare.Read, 4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var header = new byte[4];
         var count = 0;
+        var hasFrames = false;
         while (await reader.ReadLineAsync(cancellationToken) is { } line)
         {
-            if (++count > MaximumFrameLines) throw new PhotoDecoderBudgetException();
-            RecordFrame(line, tracks);
+            if (++count > MaximumMediaLines) throw new PhotoDecoderBudgetException();
+            if (mp3 is not null && line.StartsWith("packet|", StringComparison.Ordinal))
+                await VerifyMp3PacketAsync(line, mp3, header, cancellationToken);
+            else
+            {
+                RecordFrame(line, tracks);
+                hasFrames = true;
+            }
         }
 
-        return count > 0;
+        return hasFrames;
+    }
+
+    private static Task VerifyMp3PacketAsync(string packet, FileStream file, Memory<byte> header,
+        CancellationToken cancellationToken)
+    {
+        if (!long.TryParse(Field(packet, "pos="), NumberStyles.None, CultureInfo.InvariantCulture, out var position)
+            || !TryPositiveInteger(Field(packet, "size="), out var size)
+            || Field(packet, "flags=").Contains('C'))
+            throw new PhotoContentInvalidException();
+
+        return Mp3FrameReader.RequireCompleteAsync(file, position, size, header, cancellationToken);
     }
 
     private static void RecordFrame(ReadOnlySpan<char> frame, Dictionary<int, AudioTrackTimingModel> tracks)
