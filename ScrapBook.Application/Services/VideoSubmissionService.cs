@@ -149,11 +149,12 @@ public sealed class VideoSubmissionService(IPhotoSubmissionRepository submission
         if (file.PartSha256 is null) return true;
 
         var open = await storage.ListMultipartUploadsAsync(file.Bucket, file.TemporaryKey, cancellationToken);
+        var partsRemain = false;
         foreach (var uploadId in open)
         {
             await storage.AbortMultipartUploadAsync(file.Bucket, file.TemporaryKey, uploadId, cancellationToken);
             var parts = await storage.ListPartsAsync(file.Bucket, file.TemporaryKey, uploadId, cancellationToken);
-            if (parts is { Count: > 0 }) return false;
+            partsRemain |= parts is { Count: > 0 };
         }
         if (file.MultipartId is { } canonical && !open.Contains(canonical, StringComparer.Ordinal))
         {
@@ -161,7 +162,7 @@ public sealed class VideoSubmissionService(IPhotoSubmissionRepository submission
             if (parts is { Count: > 0 })
             {
                 await storage.AbortMultipartUploadAsync(file.Bucket, file.TemporaryKey, canonical, cancellationToken);
-                return false;
+                partsRemain = true;
             }
         }
         var remaining = await storage.ListMultipartUploadsAsync(file.Bucket, file.TemporaryKey, cancellationToken);
