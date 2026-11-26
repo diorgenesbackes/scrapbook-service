@@ -40,7 +40,10 @@ public sealed class SubmissionRepository(ScrapBookDbContext context) : ISubmissi
         CancellationToken cancellationToken)
     {
         var rows = await ReadAsync(() => context.Database.SqlQuery<SubmissionAttemptEntity>($"""
-            SELECT operation.state AS "State", record.confirmed_at AS "ConfirmedAt",
+            SELECT record.id AS "RecordId", record.format AS "Format", operation.result_code AS "ResultCode",
+                session.completion_deadline_at AS "CompletionDeadlineAt",
+                CASE WHEN operation.state = 'in_progress' THEN session.state ELSE operation.state END AS "State",
+                record.confirmed_at AS "ConfirmedAt",
                 operation.hash_key_id AS "HashKeyId", operation.payload_hash AS "PayloadHash",
                 operation.authorization_hash AS "AuthorizationHash",
                 operation.authorization_expires_at AS "AuthorizationExpiresAt"
@@ -48,6 +51,7 @@ public sealed class SubmissionRepository(ScrapBookDbContext context) : ISubmissi
             JOIN scrapbook.records AS record
                 ON record.id = operation.idempotent_operations_records_id
                 AND record.records_events_id = operation.idempotent_operations_events_id
+            JOIN scrapbook.upload_sessions AS session ON session.upload_sessions_idempotent_operations_id = operation.id
             WHERE operation.idempotent_operations_events_id = {eventId}
                 AND operation.operation = {operation} AND operation.key = {attemptKey}
             """).ToListAsync(cancellationToken));
@@ -129,6 +133,11 @@ public sealed class SubmissionRepository(ScrapBookDbContext context) : ISubmissi
         catch (NpgsqlException error) when (error.IsTransient)
         {
             throw new PostgresUnavailableException(error);
+        }
+        catch (PostgresException error) when (error.SqlState.StartsWith("23", StringComparison.Ordinal)
+            || error.SqlState == PostgresErrorCodes.RaiseException)
+        {
+            throw new PostgresWriteRejectedException();
         }
     }
 }
