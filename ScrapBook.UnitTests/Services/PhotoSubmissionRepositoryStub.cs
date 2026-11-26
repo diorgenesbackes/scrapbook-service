@@ -11,6 +11,7 @@ internal sealed class PhotoSubmissionRepositoryStub(EventEntity item) : IPhotoSu
     public IReadOnlyList<PhotoSubmissionEntity>? Files { get; set; }
     public CreatePhotoSubmissionCommand? Admitted { get; private set; }
     public HashSet<string> ReceivedVersions { get; } = [];
+    public Dictionary<(long ObjectId, string Version), PhotoReceiptModel> Received { get; } = [];
     public List<PhotoReceiptModel> Pinned { get; } = [];
     public List<bool> Seals { get; } = [];
     public IReadOnlyDictionary<long, string>? Problems { get; private set; }
@@ -58,6 +59,7 @@ internal sealed class PhotoSubmissionRepositoryStub(EventEntity item) : IPhotoSu
         CancellationToken cancellationToken)
     {
         ReceivedVersions.Add(receipt.VersionId);
+        Received.TryAdd((storageObjectId, receipt.VersionId), receipt);
         return Task.CompletedTask;
     }
 
@@ -70,7 +72,7 @@ internal sealed class PhotoSubmissionRepositoryStub(EventEntity item) : IPhotoSu
     }
 
     public Task<bool> HasReceiptAsync(long storageObjectId, string versionId, CancellationToken cancellationToken) =>
-        Task.FromResult(ReceivedVersions.Contains(versionId));
+        Task.FromResult(Received.ContainsKey((storageObjectId, versionId)));
 
     public Task<bool> ConfirmAsync(ConfirmPhotoSubmissionCommand command, CancellationToken cancellationToken)
     {

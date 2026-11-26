@@ -51,19 +51,39 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         return Represent(attempt);
     }
 
-    public async Task<PhotoUploadAuthorizationResponse> AuthorizePhotoAsync(string code, Guid attemptKey, Guid fileKey,
-        byte[] secret, CancellationToken cancellationToken)
+    public Task<PhotoUploadAuthorizationResponse> AuthorizePhotoAsync(string code, Guid attemptKey, Guid fileKey,
+        byte[] secret, CancellationToken cancellationToken) =>
+        AuthorizeUploadAsync(code, attemptKey, fileKey, secret, null, cancellationToken);
+
+    public async Task<PhotoUploadAuthorizationResponse> AuthorizeUploadAsync(string code, Guid attemptKey, Guid fileKey,
+        byte[] secret, int? partNumber, CancellationToken cancellationToken)
     {
         var attempt = await FindAuthorizedAttemptAsync(code, attemptKey, secret, cancellationToken);
-        if (attempt.Format != "photo") throw new SubmissionAttemptNotFoundException();
-        return await RequirePhotoService().AuthorizeAsync(attempt.RecordId, fileKey, attempt.AuthorizationExpiresAt, cancellationToken);
+        return await RequireMediaService(attempt.Format).AuthorizeAsync(attempt.RecordId, fileKey,
+            attempt.AuthorizationExpiresAt, partNumber, cancellationToken);
     }
 
-    public async Task<SubmissionStatusResponse> SignalPhotoCompletionAsync(string code, Guid attemptKey, byte[] secret,
+    public async Task<MediaUploadStatusResponse> GetUploadStatusAsync(string code, Guid attemptKey, Guid fileKey, byte[] secret,
         CancellationToken cancellationToken)
     {
         var attempt = await FindAuthorizedAttemptAsync(code, attemptKey, secret, cancellationToken);
-        if (attempt.Format != "photo") throw new SubmissionAttemptNotFoundException();
+        return await RequireMediaService(attempt.Format).GetUploadStatusAsync(attempt.RecordId, fileKey, cancellationToken);
+    }
+
+    public Task<SubmissionStatusResponse> SignalPhotoCompletionAsync(string code, Guid attemptKey, byte[] secret,
+        CancellationToken cancellationToken) =>
+        SignalCompletionAsync(code, attemptKey, secret, cancellationToken);
+
+    public async Task<SubmissionStatusResponse> SignalCompletionAsync(string code, Guid attemptKey, byte[] secret,
+        CancellationToken cancellationToken)
+    {
+        var attempt = await FindAuthorizedAttemptAsync(code, attemptKey, secret, cancellationToken);
+        if (attempt.Format is not ("photo" or "video")) throw new SubmissionAttemptNotFoundException();
+        if (attempt.Format == "video" && attempt.State == "receiving")
+        {
+            await RequireMediaService(attempt.Format).SignalVideoCompletionAsync(attempt.RecordId, cancellationToken);
+            attempt = await FindAuthorizedAttemptAsync(code, attemptKey, secret, cancellationToken);
+        }
         return Represent(attempt);
     }
 
@@ -86,11 +106,11 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         var keyId = RequireEnabled();
         ValidateCode(code);
         await using var transaction = await repository.BeginAsync(cancellationToken);
-        var isPhoto = request.Format == "photo";
-        var item = isPhoto
+        var isMedia = request.Format is "photo" or "video";
+        var item = isMedia
             ? await repository.FindEventForShareAsync(code, cancellationToken) ?? throw new PublicEventNotFoundException()
             : await FindEventAsync(code, true, cancellationToken);
-        if (isPhoto)
+        if (isMedia)
         {
             await repository.LockPhotoAttemptAsync(item.Id, attemptKey, cancellationToken);
         }
@@ -122,8 +142,8 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         var consentedAt = RequireConsent(identification, item.Id, notice, name, ingress);
         if (files is not null)
         {
-            var status = await RequirePhotoService().AdmitAsync(item, notice.Id, request.Category, name, caption, files,
-                consentedAt, ingress, Operation, attemptKey, keyId,
+            var status = await RequireMediaService(request.Format).AdmitAsync(item, notice.Id, request.Category,
+                request.Format!, name, caption, files, consentedAt, ingress, Operation, attemptKey, keyId,
                 protection.HashPayload(keyId, item.Id, notice.Code, name, canonicalPayload)!,
                 protection.HashAuthorization(keyId, item.Id, attemptKey, secret)!, correlationId, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -224,7 +244,7 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
     private static (string? Text, string? Caption, IReadOnlyList<PhotoManifestModel>? Files, string CanonicalPayload) NormalizePayload(
         CreateSubmissionRequest request)
     {
-        if (request.Format == "photo")
+        if (request.Format is "photo" or "video")
         {
             return PhotoSubmissionService.NormalizePayload(request);
         }
@@ -235,7 +255,12 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         return (text, null, null, text);
     }
 
-    private PhotoSubmissionService RequirePhotoService() => photos ?? throw new PhotoSubmissionDisabledException();
+    private PhotoSubmissionService RequireMediaService(string? format) => format switch
+    {
+        "photo" => photos ?? throw new PhotoSubmissionDisabledException(),
+        "video" => photos ?? throw new VideoSubmissionDisabledException(),
+        _ => throw new SubmissionAttemptNotFoundException()
+    };
 
     internal static string? NormalizeLineEndings(string? text) =>
         text?.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
@@ -287,11 +312,12 @@ public sealed class SubmissionService(ISubmissionRepository repository, ISubmiss
         var deadline = attempt.CompletionDeadlineAt is { } completionDeadline && attempt.State == "receiving"
             ? EventOpeningService.ToBrasiliaInstant(completionDeadline).ToUniversalTime()
             : (DateTimeOffset?)null;
-        if (attempt.Category == "moment" && deadline is { } cutoff && clock.GetUtcNow() >= cutoff)
+        if ((attempt.Category == "moment" || attempt.Format == "video") && deadline is { } cutoff && clock.GetUtcNow() >= cutoff)
         {
             return new SubmissionStatusResponse("reconciling");
         }
-        var pending = attempt.Category == "moment" && attempt.State == "receiving" ? attempt.PendingPositions : null;
+        var pending = attempt.Category == "moment" && attempt.Format == "photo" && attempt.State == "receiving"
+            ? attempt.PendingPositions : null;
         var problems = attempt.Category == "moment" && attempt.State is "rejected" or "expired"
             && attempt.ProblemPositions is { } positions && attempt.ProblemCodes is { } codes
             ? positions.Zip(codes, (position, code) => new PhotoPositionProblemModel(position, code)).ToArray()

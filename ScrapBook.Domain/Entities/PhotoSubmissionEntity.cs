@@ -15,6 +15,10 @@ public sealed class PhotoSubmissionEntity
     public required string OriginalKey { get; init; }
     public string? TemporaryVersion { get; init; }
     public DateTimeOffset? ReceiptAt { get; init; }
+    public string Format { get; init; } = "photo";
+    public string Category { get; init; } = "testimonial";
+    public string? MultipartId { get; init; }
+    public byte[][]? PartSha256 { get; init; }
     public Guid FileKey { get; init; }
     public required string DeclaredMediaType { get; init; }
     public int DeclaredSize { get; init; }
