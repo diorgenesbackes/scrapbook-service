@@ -169,7 +169,7 @@ public sealed class VideoSubmissionService(IPhotoSubmissionRepository submission
     {
         var kind = file.PartSha256 is null ? "put" : "complete_multipart";
         var receivedAt = await videos.FindReceiptAtAsync(file.TemporaryObjectId, versionId, kind, cancellationToken);
-        return receivedAt >= PhotoSubmissionService.Deadline(file.CompletionDeadlineAt);
+        return receivedAt > PhotoSubmissionService.Deadline(file.CompletionDeadlineAt);
     }
 
     internal async Task<VideoMetadataModel> ValidateAsync(PhotoSubmissionEntity file, string version,

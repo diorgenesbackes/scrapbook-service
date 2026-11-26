@@ -28,7 +28,7 @@ public sealed class FfprobeVideoDecoder(string executablePath)
             var metadata = await ProbeAsync(path, webm, MaximumMetadataOutput,
                 ["-show_format", "-show_streams", "-show_entries",
                     "format=format_name,duration:format_tags=major_brand:stream=index,codec_type,codec_name,width,height,"
-                    + "duration,avg_frame_rate,r_frame_rate:stream_disposition=attached_pic:stream_side_data=rotation",
+                    + "duration,time_base,sample_rate,avg_frame_rate,r_frame_rate:stream_disposition=attached_pic:stream_side_data=rotation",
                     "-output_format", "json"], budget.Token);
             using var json = JsonDocument.Parse(metadata, new JsonDocumentOptions { MaxDepth = 10 });
             var streams = json.RootElement.GetProperty("streams");
@@ -45,11 +45,12 @@ public sealed class FfprobeVideoDecoder(string executablePath)
             var audioIndex = audioCodec is null ? (int?)null : RequiredInteger(audio, "index", 0);
             var (numerator, denominator) = FrameRate(primaryVideo);
             var (mediaType, container) = Container(format, webm);
-            var duration = Math.Max(Duration(format), Duration(primaryVideo));
-            if (audioCodec is not null) duration = Math.Max(duration, Duration(audio));
-            var measuredDuration = await MeasurePacketDurationAsync(path, webm, index, audioIndex,
-                (decimal)denominator / numerator, budget.Token);
-            if (duration == 0) duration = measuredDuration;
+            var sampleRate = int.TryParse(Text(audio, "sample_rate"), NumberStyles.None, CultureInfo.InvariantCulture,
+                out var parsedSampleRate) && parsedSampleRate > 0 ? parsedSampleRate : 0;
+            var measuredDuration = await MeasurePacketDurationAsync(path, webm, index, audioIndex, sampleRate,
+                (decimal)denominator / numerator, WebmTimestampStep(primaryVideo, webm), budget.Token);
+            var duration = Math.Max(Duration(primaryVideo), measuredDuration);
+            if (!webm) duration = Math.Max(duration, Math.Max(Duration(format), Duration(audio)));
 
             await RequireDecodedFrameAsync(path, webm, index, budget.Token);
             return new VideoMetadataModel(mediaType, container, codec, audioCodec, duration, width, height,
@@ -59,7 +60,7 @@ public sealed class FfprobeVideoDecoder(string executablePath)
         {
             throw new PhotoDecoderBudgetException();
         }
-        catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException)
+        catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException or OverflowException)
         {
             throw new PhotoContentInvalidException();
         }
@@ -74,14 +75,16 @@ public sealed class FfprobeVideoDecoder(string executablePath)
         if (!result.AsSpan().Contains("video", StringComparison.Ordinal)) throw new PhotoContentInvalidException();
     }
 
-    private async Task<decimal> MeasurePacketDurationAsync(string path, bool webm, int video, int? audio, decimal frameDuration,
-        CancellationToken cancellationToken)
+    private async Task<decimal> MeasurePacketDurationAsync(string path, bool webm, int video, int? audio,
+        int sampleRate, decimal frameDuration, decimal timestampStep, CancellationToken cancellationToken)
     {
         var result = await ProbeAsync(path, webm, MaximumPacketOutput, ["-show_packets", "-show_entries",
-            "packet=stream_index,pts_time,duration_time,flags", "-output_format", "compact=p=1:nk=0"], cancellationToken);
-        decimal? first = null;
-        decimal? last = null;
-        var hasVideo = false;
+            "packet=stream_index,pts_time,duration_time,flags:packet_side_data=skip_samples,discard_padding",
+            "-output_format", "compact=p=1:nk=0"], cancellationToken);
+        decimal? videoFirst = null;
+        decimal? videoLast = null;
+        decimal? audioFirst = null;
+        decimal? audioLast = null;
         var output = result.AsSpan();
         foreach (var line in output.Split('\n'))
         {
@@ -90,18 +93,61 @@ public sealed class FfprobeVideoDecoder(string executablePath)
             var streamText = PacketField(packet, "stream_index=");
             var flags = PacketField(packet, "flags=");
             if (flags.IndexOf('C') >= 0) throw new PhotoContentInvalidException();
-            if (!int.TryParse(streamText, NumberStyles.None, CultureInfo.InvariantCulture, out var stream)
+            if (flags.IndexOf('D') >= 0 || !int.TryParse(streamText, NumberStyles.None, CultureInfo.InvariantCulture, out var stream)
                 || stream != video && stream != audio || !TryDuration(PacketField(packet, "pts_time="), out var pts))
                 continue;
 
-            hasVideo |= stream == video;
-            if (!TryDuration(PacketField(packet, "duration_time="), out var duration) || duration <= 0)
-                duration = stream == video ? frameDuration : 0;
-            first = Math.Min(first ?? pts, pts);
-            last = Math.Max(last ?? pts, pts + duration);
+            if (!TryDuration(PacketField(packet, "duration_time="), out var length) || length <= 0)
+                length = stream == video ? frameDuration : 0;
+            if (stream == video)
+            {
+                videoFirst = Math.Min(videoFirst ?? pts, pts);
+                videoLast = Math.Max(videoLast ?? pts, pts + length);
+            }
+            else
+            {
+                RecordAudioPacket(packet, pts, length, sampleRate, ref audioFirst, ref audioLast);
+            }
         }
 
-        return hasVideo && last - first is > 0 and var measured ? measured : throw new PhotoContentInvalidException();
+        if (videoFirst is null || videoLast is null || videoLast <= videoFirst) throw new PhotoContentInvalidException();
+        if (audioFirst is null || audioLast is null) return videoLast.Value - videoFirst.Value;
+        if (webm)
+        {
+            audioFirst = Math.Max(0, audioFirst.Value);
+            if (timestampStep > 0) audioLast = decimal.Floor(audioLast.Value / timestampStep) * timestampStep;
+        }
+
+        return Math.Max(videoLast.Value, audioLast.Value) - Math.Min(videoFirst.Value, audioFirst.Value);
+    }
+
+    private static void RecordAudioPacket(ReadOnlySpan<char> packet, decimal pts, decimal duration,
+        int sampleRate, ref decimal? first, ref decimal? last)
+    {
+        var begin = pts;
+        var end = pts + duration;
+        if (sampleRate > 0)
+        {
+            begin += PacketSampleOffset(packet, "side_datum/skip_samples:skip_samples=", sampleRate);
+            end -= PacketSampleOffset(packet, "side_datum/skip_samples:discard_padding=", sampleRate);
+        }
+        if (end <= begin) return;
+        first = Math.Min(first ?? begin, begin);
+        last = Math.Max(last ?? end, end);
+    }
+
+    private static decimal PacketSampleOffset(ReadOnlySpan<char> packet, string name, int sampleRate) =>
+        int.TryParse(PacketField(packet, name), NumberStyles.None, CultureInfo.InvariantCulture, out var samples)
+            ? (decimal)samples / sampleRate : 0;
+
+    private static decimal WebmTimestampStep(JsonElement stream, bool webm)
+    {
+        if (!webm) return 0;
+        var timeBase = Text(stream, "time_base").AsSpan();
+        var separator = timeBase.IndexOf('/');
+        return separator > 0 && int.TryParse(timeBase[..separator], NumberStyles.None, CultureInfo.InvariantCulture, out var n)
+            && n > 0 && int.TryParse(timeBase[(separator + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out var d) && d > 0
+            ? (decimal)n / d : 0;
     }
 
     private static ReadOnlySpan<char> PacketField(ReadOnlySpan<char> packet, string name)
@@ -238,7 +284,11 @@ public sealed class FfprobeVideoDecoder(string executablePath)
     {
         if (!stream.TryGetProperty("side_data_list", out var sideData)) return null;
         foreach (var item in sideData.EnumerateArray())
-            if (Integer(item, "rotation") is >= -180 and <= 180 and var rotation) return rotation;
+        {
+            if (Integer(item, "rotation") is not { } rotation) continue;
+            if (rotation % 90 != 0) throw new PhotoContentInvalidException();
+            return (rotation % 360 + 360) % 360;
+        }
         return null;
     }
 
@@ -256,7 +306,8 @@ public sealed class FfprobeVideoDecoder(string executablePath)
         throw new PhotoContentInvalidException();
     }
 
-    private static string? Text(JsonElement value, string name) => value.TryGetProperty(name, out var property)
+    private static string? Text(JsonElement value, string name) => value.ValueKind == JsonValueKind.Object
+        && value.TryGetProperty(name, out var property)
         && property.ValueKind == JsonValueKind.String ? property.GetString() : null;
 
     private static decimal Duration(JsonElement value) =>
