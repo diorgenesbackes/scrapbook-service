@@ -79,6 +79,7 @@ public sealed class S3MediaVideoStorageTests
 
     [FfmpegTheory]
     [InlineData("video-rotated-444.mov")]
+    [InlineData("video-rotated-interlaced.mov")]
     public async Task StagesRotatedH264InProgressiveYuv420WithoutChangingTheSourceGeometryOrCadenceAsync(string fixture)
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
