@@ -67,7 +67,7 @@ internal sealed class FfprobeVideoProfileDecoder(string executablePath)
                 aspect.Numerator, aspect.Denominator, frameRate.Numerator, frameRate.Denominator, rotation, variable,
                 channels, sampleRate, hasLocation, audioProfile);
             return new VideoDecodingModel(properties, mediaType, videoIndex, audioIndex, tracks.GetArrayLength(),
-                packets.VideoPacketCount);
+                packets.VideoPacketCount, Text(video, "pix_fmt"), Text(video, "field_order"));
         }
         catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException
             or OverflowException or EndOfStreamException)
@@ -79,7 +79,8 @@ internal sealed class FfprobeVideoProfileDecoder(string executablePath)
     private async Task<JsonDocument> ReadMetadataAsync(string path, bool webm, CancellationToken cancellationToken)
     {
         const string entries = "format=format_name,duration:format_tags:stream=index,codec_type,codec_name,width,height,"
-            + "duration,time_base,sample_rate,channels,profile,sample_aspect_ratio,avg_frame_rate,r_frame_rate:stream_tags"
+            + "duration,time_base,sample_rate,channels,profile,pix_fmt,field_order,sample_aspect_ratio,avg_frame_rate,r_frame_rate"
+            + ":stream_tags"
             + ":stream_disposition=attached_pic:stream_side_data=side_data_type,rotation,displaymatrix";
         var input = InputOptions(webm);
         string[] arguments = [.. input, "-show_format", "-show_streams", "-show_entries", entries,
