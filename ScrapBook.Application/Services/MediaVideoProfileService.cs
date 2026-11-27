@@ -5,6 +5,7 @@ namespace ScrapBook.Application.Services;
 internal static class MediaVideoProfileService
 {
     private const int EncoderPixelStep = 2;
+    private const int MinimumExplicitMediaConvertDimension = 32;
 
     internal static MediaVideoProfileModel? Create(MediaVideoPropertiesModel? source)
     {
@@ -28,8 +29,13 @@ internal static class MediaVideoProfileService
         var (fittedWidth, fittedHeight) = Fit(width, height, source.PixelAspectDenominator, maxWidth, maxHeight);
         if (fittedWidth == 0 || fittedHeight == 0) return null;
 
+        var useSourceDimensions = fittedWidth < MinimumExplicitMediaConvertDimension || fittedHeight < MinimumExplicitMediaConvertDimension;
+        if (useSourceDimensions && (fittedWidth != rasterWidth || fittedHeight != rasterHeight
+            || source.PixelAspectNumerator != source.PixelAspectDenominator))
+            return null;
+
         var (numerator, denominator) = LimitFrameRate(source.FrameRateNumerator, source.FrameRateDenominator);
-        return new(fittedWidth, fittedHeight, numerator, denominator, rotation);
+        return new(fittedWidth, fittedHeight, numerator, denominator, rotation, useSourceDimensions);
     }
 
     internal static bool MatchesOutput(MediaAudioVariantModel variant, MediaVideoPropertiesModel source,
