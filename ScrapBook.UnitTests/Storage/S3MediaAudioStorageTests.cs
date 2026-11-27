@@ -112,6 +112,8 @@ public sealed class S3MediaAudioStorageTests
 
     [FfmpegTheory]
     [InlineData("audio-aac.m4a", true)]
+    [InlineData("audio-aac-location.m4a", false)]
+    [InlineData("audio-aac-quicktime-location.m4a", false)]
     [InlineData("audio-opus.ogg", false)]
     [InlineData("audio-alac.m4a", false)]
     [InlineData("audio-with-video.mp4", false)]
