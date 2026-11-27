@@ -1,6 +1,6 @@
+using ScrapBook.Application.Codecs;
 using System.Globalization;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using ScrapBook.Domain.Commands;
 using ScrapBook.Domain.Entities;
@@ -18,7 +18,6 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
 {
     public const string TemporaryPrefix = "submissions/temporary/";
     private const string OriginalPrefix = "submissions/original/";
-    private const string MediaConfirmation = "record.media-confirmed.v1";
     private const string PutReceipt = "put";
     private const int MaximumSize = 20_000_000;
     private static readonly TimeSpan CleanupDelay = TimeSpan.FromHours(24);
@@ -465,8 +464,7 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
     private static SubmissionOutboxEntity MediaConfirmationMessage(PhotoSubmissionEntity file, Guid correlation,
         DateTimeOffset committedAt)
     {
-        var mediaId = new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(
-            MediaConfirmation + ":" + file.FileId.ToString(CultureInfo.InvariantCulture))).AsSpan(0, 16));
+        var mediaId = MediaConfirmationCodec.MessageId(file.FileId);
         var payload = JsonSerializer.Serialize(new
         {
             eventId = file.EventId.ToString(CultureInfo.InvariantCulture),
@@ -474,7 +472,7 @@ public sealed class PhotoSubmissionService(IPhotoSubmissionRepository photos, IS
             fileId = file.FileId.ToString(CultureInfo.InvariantCulture),
             confirmedAt = committedAt
         });
-        return new SubmissionOutboxEntity(mediaId, MediaConfirmation, file.EventId, payload, correlation, committedAt);
+        return new SubmissionOutboxEntity(mediaId, MediaConfirmationModel.Type, file.EventId, payload, correlation, committedAt);
     }
 
     private static bool MatchesContent(byte[] bytes, PhotoSubmissionEntity submission) =>
