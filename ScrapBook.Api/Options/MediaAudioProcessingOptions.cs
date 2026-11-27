@@ -12,6 +12,11 @@ public sealed record MediaAudioProcessingOptions(bool Enabled, MediaAudioSetting
     {
         var section = configuration.GetSection(SectionName);
         if (!bool.TryParse(section["Enabled"] ?? "false", out var enabled)) throw Invalid("Enabled");
+        if (!bool.TryParse(section["VideoEnabled"] ?? "false", out var videoEnabled)
+            || videoEnabled && (!enabled || !photos.VideoEnabled))
+        {
+            throw Invalid("VideoEnabled");
+        }
         if (!enabled) return new(false, new("", "", "", ""), "", null, null);
         if (!photos.Enabled || !photos.AudioEnabled || !media.Enabled) throw Invalid("Enabled");
 
@@ -47,7 +52,7 @@ public sealed record MediaAudioProcessingOptions(bool Enabled, MediaAudioSetting
         {
             throw Invalid("ResultQueueUrl");
         }
-        var settings = new MediaAudioSettings(account, region, queueArn, jobRoleArn);
+        var settings = new MediaAudioSettings(account, region, queueArn, jobRoleArn) { VideoEnabled = videoEnabled };
         return new(true, settings, queue.AbsoluteUri,
             SnsSqsOptions.ReadEndpoint(section, development, SectionName, "MediaConvertServiceUrl"),
             SnsSqsOptions.ReadEndpoint(section, development, SectionName, "SqsServiceUrl"));

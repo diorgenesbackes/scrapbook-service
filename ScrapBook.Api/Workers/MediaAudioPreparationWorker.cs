@@ -30,7 +30,7 @@ public sealed class MediaAudioPreparationWorker(IServiceScopeFactory scopes, ILo
                 catch (Exception error) when (error is PostgresUnavailableException or PostgresWriteRejectedException
                     or MediaPreparationWriteException)
                 {
-                    logger.LogWarning("Audio preparation requires reconciliation. {ErrorCode}", "MEDIA_AUDIO_DATABASE_RETRY");
+                    logger.LogWarning("Media transcoding requires reconciliation. {ErrorCode}", "MEDIA_AUDIO_DATABASE_RETRY");
                     await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
                 }
             }
