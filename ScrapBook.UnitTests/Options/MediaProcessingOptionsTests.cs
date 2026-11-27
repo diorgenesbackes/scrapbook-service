@@ -5,6 +5,10 @@ namespace ScrapBook.UnitTests.Options;
 
 public sealed class MediaProcessingOptionsTests
 {
+    private const string Region = "us-east-1";
+    private const string Topic = "arn:aws:sns:us-east-1:123456789012:events";
+    private const string MediaQueue = "https://sqs.us-east-1.amazonaws.com/123456789012/media-confirmation";
+    private const string ReceiptQueue = "https://sqs.us-east-1.amazonaws.com/123456789012/receipts";
     [Fact]
     public void StartsDisabledIndependentlyOfStructuralLockConfiguration()
     {
@@ -13,7 +17,7 @@ public sealed class MediaProcessingOptionsTests
             ["EventStructuralLock:Enabled"] = "true"
         }).Build();
 
-        var options = MediaProcessingOptions.FromConfiguration(configuration, false, Photos(true, "us-east-1"));
+        var options = MediaProcessingOptions.FromConfiguration(configuration, false, Photos(true, Region), StructuralLock(false));
 
         Assert.False(options.Enabled);
     }
@@ -24,7 +28,7 @@ public sealed class MediaProcessingOptionsTests
     public void RequiresEnabledPhotoIngressInTheSameRegion(bool photoEnabled, string photoRegion)
     {
         var error = Assert.Throws<StartupConfigurationException>(() =>
-            MediaProcessingOptions.FromConfiguration(Enabled(), false, Photos(photoEnabled, photoRegion)));
+            MediaProcessingOptions.FromConfiguration(Enabled(), false, Photos(photoEnabled, photoRegion), StructuralLock(false)));
 
         Assert.Equal("MediaProcessing:Region", error.OptionName);
     }
@@ -32,21 +36,66 @@ public sealed class MediaProcessingOptionsTests
     [Fact]
     public void UsesTheMediaQueueWithoutRequiringStructuralLockOptions()
     {
-        var options = MediaProcessingOptions.FromConfiguration(Enabled(), false, Photos(true, "us-east-1"));
+        var options = MediaProcessingOptions.FromConfiguration(Enabled(), false, Photos(true, Region), StructuralLock(false));
 
         Assert.True(options.Enabled);
-        Assert.Equal("https://sqs.us-east-1.amazonaws.com/123456789012/media-confirmation", options.QueueUrl);
+        Assert.Equal(MediaQueue, options.QueueUrl);
+    }
+
+    [Theory]
+    [InlineData(MediaQueue)]
+    [InlineData("https://SQS.US-EAST-1.AMAZONAWS.COM:443/123456789012/%6Dedia-confirmation/")]
+    public void RejectsThePhotoReceiptQueueEvenWhenTheUrlUsesEquivalentSpelling(string receiptQueue)
+    {
+        var error = Assert.Throws<StartupConfigurationException>(() => MediaProcessingOptions.FromConfiguration(
+            Enabled(), false, Photos(true, Region, receiptQueue), StructuralLock(false)));
+
+        Assert.Equal("MediaProcessing:QueueUrl", error.OptionName);
+    }
+
+    [Fact]
+    public void RejectsTheEnabledStructuralLockQueueEvenWhenTheHostAndPortUseEquivalentSpelling()
+    {
+        const string queue = "https://SQS.US-EAST-1.AMAZONAWS.COM:443/123456789012/media-confirmation";
+        var error = Assert.Throws<StartupConfigurationException>(() => MediaProcessingOptions.FromConfiguration(
+            Enabled(), false, Photos(true, Region), StructuralLock(true, queue)));
+
+        Assert.Equal("MediaProcessing:QueueUrl", error.OptionName);
+    }
+
+    [Fact]
+    public void AllowsAQueueUrlTheDisabledStructuralLockConsumerDoesNotUse()
+    {
+        var options = MediaProcessingOptions.FromConfiguration(Enabled(), false, Photos(true, Region),
+            StructuralLock(false, MediaQueue));
+
+        Assert.True(options.Enabled);
+        Assert.Equal(MediaQueue, options.QueueUrl);
+    }
+
+    [Fact]
+    public void AllowsTheEnabledConsumersToShareATopicAndUseDistinctQueues()
+    {
+        var structuralLock = StructuralLock(true, "https://sqs.us-east-1.amazonaws.com/123456789012/Media-confirmation");
+        var options = MediaProcessingOptions.FromConfiguration(Enabled(), false, Photos(true, Region), structuralLock);
+
+        Assert.True(options.Enabled);
+        Assert.Equal(structuralLock.TopicArn, options.TopicArn);
+        Assert.NotEqual(structuralLock.QueueUrl, options.QueueUrl);
     }
 
     private static IConfiguration Enabled() => new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
     {
         ["MediaProcessing:Enabled"] = "true",
-        ["MediaProcessing:Region"] = "us-east-1",
-        ["MediaProcessing:TopicArn"] = "arn:aws:sns:us-east-1:123456789012:events",
-        ["MediaProcessing:QueueUrl"] = "https://sqs.us-east-1.amazonaws.com/123456789012/media-confirmation"
+        ["MediaProcessing:Region"] = Region,
+        ["MediaProcessing:TopicArn"] = Topic,
+        ["MediaProcessing:QueueUrl"] = MediaQueue
     }).Build();
 
-    private static PhotoSubmissionsOptions Photos(bool enabled, string region) =>
-        new(enabled, "private-media", "https://sqs.us-east-1.amazonaws.com/123456789012/receipts", region,
+    private static EventStructuralLockOptions StructuralLock(bool enabled, string queue = "") =>
+        new(enabled, Region, Topic, queue, null, null);
+
+    private static PhotoSubmissionsOptions Photos(bool enabled, string region, string queue = ReceiptQueue) =>
+        new(enabled, "private-media", queue, region,
             null, null, null, false, false, "/usr/bin/ffprobe");
 }

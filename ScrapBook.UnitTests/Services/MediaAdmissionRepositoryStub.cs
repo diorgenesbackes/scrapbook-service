@@ -12,6 +12,7 @@ internal sealed class MediaAdmissionRepositoryStub : IMediaAdmissionRepository
     public bool JobInserted { get; set; } = true;
     public List<EventWriteTestTransaction> Transactions { get; } = [];
     public List<(MediaConfirmationModel Message, bool Locked, CancellationToken Token)> SourceReads { get; } = [];
+    public List<(string Consumer, string Source, Guid MessageId, CancellationToken Token, bool SourceLocked)> DeliveryReads { get; } = [];
     public List<(MediaConfirmationModel Message, int ProfileVersion, string Kind, string[] VariantKinds, DateTimeOffset Now, CancellationToken Token)> Jobs { get; } = [];
     public List<(string Consumer, string Source, MediaConfirmationModel Message, byte[] Hash, DateTimeOffset Now, CancellationToken Token)> Deliveries { get; } = [];
 
@@ -33,6 +34,7 @@ internal sealed class MediaAdmissionRepositoryStub : IMediaAdmissionRepository
     public Task<ProcessedMessageEntity?> FindDeliveryAsync(string consumer, string source, Guid messageId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        DeliveryReads.Add((consumer, source, messageId, cancellationToken, SourceReads.LastOrDefault().Locked));
         return Task.FromResult(Delivery);
     }
 
