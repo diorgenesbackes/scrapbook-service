@@ -13,7 +13,8 @@ internal static class MediaConfirmationService
     internal static bool MatchesSource(MediaConfirmationModel message, MediaSourceEntity? original)
     {
         var confirmedAt = SubmissionService.Civil(MediaConfirmationCodec.MicrosecondPrecision(message.ConfirmedAt));
-        return original is {
+        return original is
+        {
             RecordState: "confirmed", ValidationState: "valid", Size: > 0, Sha256.Length: 32, OriginalSha256.Length: 32
         } && original.EventId == message.EventId && original.RecordId == message.RecordId && original.FileId == message.FileId
             && original.RecordConfirmedAt == confirmedAt && original.FileConfirmedAt == confirmedAt
