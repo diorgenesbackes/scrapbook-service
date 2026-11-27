@@ -21,7 +21,7 @@ public sealed record MediaProcessingOptions(bool Enabled, string Region, string 
         return new(options.Enabled, options.Region, options.TopicArn, options.QueueUrl, options.SnsServiceUrl, options.SqsServiceUrl);
     }
 
-    private static bool SameQueue(string firstUrl, string secondUrl)
+    internal static bool SameQueue(string firstUrl, string secondUrl)
     {
         var first = new Uri(firstUrl, UriKind.Absolute);
         var second = new Uri(secondUrl, UriKind.Absolute);
