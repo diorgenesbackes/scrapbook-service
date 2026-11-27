@@ -107,6 +107,36 @@ public sealed class S3MediaVideoStorageTests
     }
 
     [FfmpegTheory]
+    [InlineData("video-rotated-odd.mov")]
+    public async Task RoundsAnOddRotatedRasterDownWhilePreservingDisplayAspectAndCadenceAsync(string fixture)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var bytes = await ReadFixtureAsync(fixture, deadline.Token);
+        using var client = new MediaAudioS3ClientStub(SourceKey, bytes) { SourceMediaType = "video/quicktime" };
+        var storage = new S3MediaVideoStorage(client, Decoder());
+
+        var input = await storage.StageAsync(Source(bytes), InputKey, deadline.Token);
+
+        var properties = input.Properties;
+        Assert.Equal(("h264", 94, 64, 90, 24, 1),
+            (properties.VideoCodec, properties.Width, properties.Height, properties.Rotation,
+                properties.FrameRateNumerator, properties.FrameRateDenominator));
+        Assert.False(properties.VariableFrameRate);
+        Assert.Equal(95 * 64 * properties.PixelAspectDenominator, 65 * 94 * properties.PixelAspectNumerator);
+        using var probe = await ProbeStagedStreamsAsync(Assert.Single(client.Puts).Bytes, deadline.Token);
+        var video = Assert.Single(probe.RootElement.GetProperty("streams").EnumerateArray());
+        Assert.Equal((94, 64), (video.GetProperty("width").GetInt32(), video.GetProperty("height").GetInt32()));
+        Assert.Equal("h264", video.GetProperty("codec_name").GetString());
+        Assert.Equal("yuv420p", video.GetProperty("pix_fmt").GetString());
+        Assert.Equal("progressive", video.GetProperty("field_order").GetString());
+        Assert.Equal("24/1", video.GetProperty("avg_frame_rate").GetString());
+        Assert.Equal("608:611", video.GetProperty("sample_aspect_ratio").GetString());
+        var rotation = Assert.Single(video.GetProperty("side_data_list").EnumerateArray(),
+            item => item.TryGetProperty("rotation", out _));
+        Assert.Equal(90, rotation.GetProperty("rotation").GetInt32());
+    }
+
+    [FfmpegTheory]
     [InlineData("video-webm-opus-300s.webm")]
     public async Task StagesAConfirmedFiveMinuteVideoAfterApplyingOpusPreskipAsync(string fixture)
     {
@@ -264,7 +294,8 @@ public sealed class S3MediaVideoStorageTests
                 RedirectStandardError = true
             };
             string[] arguments = ["-v", "error", "-show_entries",
-                "stream=codec_type,codec_name,channels,duration,pix_fmt,field_order,width,height,avg_frame_rate:stream_side_data=rotation",
+                "stream=codec_type,codec_name,channels,duration,pix_fmt,field_order,width,height,sample_aspect_ratio,avg_frame_rate"
+                    + ":stream_side_data=rotation",
                 "-of", "json", path];
             foreach (var argument in arguments)
                 start.ArgumentList.Add(argument);
