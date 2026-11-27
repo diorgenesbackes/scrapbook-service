@@ -14,12 +14,14 @@ internal sealed class MediaPreparationRepositoryStub : IMediaPreparationReposito
     public List<(long EventId, long RecordId, long FileId, CancellationToken Token)> Reads { get; } = [];
     public List<(MediaConfirmationModel Message, bool Locked, CancellationToken Token)> SourceReads { get; } = [];
     public List<(MediaJobEntity Job, string Bucket, Guid Lease, DateTimeOffset Until, Guid RequestKey, string Prefix,
-        int Number, string[] Kinds, EventWriteTestTransaction Transaction)> Starts { get; } = [];
+        int Number, string[] Kinds, EventWriteTestTransaction Transaction)> Starts
+    { get; } = [];
     public List<(long Id, string State, string? Code, EventWriteTestTransaction Transaction)> Ends { get; } = [];
     public List<(PhotoPreparationWorkModel Work, DateTimeOffset At, CancellationToken Token)> LeaseChecks { get; } = [];
     public List<(PhotoPreparationWorkModel Work, PreparedPhotoVariantModel Variant, EventWriteTestTransaction Transaction)> Promotions { get; } = [];
     public List<(MediaJobEntity Job, string JobState, string FileState, string? VariantState, string? Code,
-        DateTimeOffset? RetryAt, EventWriteTestTransaction Transaction)> States { get; } = [];
+        DateTimeOffset? RetryAt, EventWriteTestTransaction Transaction)> States
+    { get; } = [];
     public List<(MediaFailureEntity Result, EventWriteTestTransaction? Transaction)> Failures { get; } = [];
 
     public Task<IEventTransaction> BeginAsync(CancellationToken cancellationToken)
