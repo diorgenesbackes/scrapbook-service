@@ -166,7 +166,7 @@ public sealed class FfprobeVideoDecoder(string executablePath)
             ? (decimal)n / d : 0;
     }
 
-    private static ReadOnlySpan<char> PacketField(ReadOnlySpan<char> packet, string name)
+    internal static ReadOnlySpan<char> PacketField(ReadOnlySpan<char> packet, string name)
     {
         foreach (var range in packet.Split('|'))
         {
@@ -265,24 +265,28 @@ public sealed class FfprobeVideoDecoder(string executablePath)
     }
 
     private static (string MediaType, string Container) Container(JsonElement format, bool webm) =>
-        (Text(format, "format_name"), webm) switch
+        Container(Text(format, "format_name"), webm,
+            format.TryGetProperty("tags", out var tags) ? Text(tags, "major_brand") : null);
+
+    internal static (string MediaType, string Container) Container(string? format, bool webm, string? majorBrand) =>
+        (format, webm) switch
         {
             ("matroska,webm", true) => ("video/webm", "webm"),
-            ("mov,mp4,m4a,3gp,3g2,mj2", false) => IsoContainer(format),
+            ("mov,mp4,m4a,3gp,3g2,mj2", false) => IsoContainer(majorBrand),
             _ => throw new PhotoContentInvalidException()
         };
 
-    private static (string MediaType, string Container) IsoContainer(JsonElement format)
+    private static (string MediaType, string Container) IsoContainer(string? majorBrand)
     {
-        var brand = format.TryGetProperty("tags", out var tags) ? Text(tags, "major_brand")?.TrimEnd() : null;
+        var brand = majorBrand?.TrimEnd();
         if (brand is null or "qt") return ("video/quicktime", "mov");
         return Mp4Brands.Contains(brand) ? ("video/mp4", "mp4") : throw new PhotoContentInvalidException();
     }
 
-    private static bool IsAttachedPicture(JsonElement stream) =>
+    internal static bool IsAttachedPicture(JsonElement stream) =>
         stream.TryGetProperty("disposition", out var disposition) && Integer(disposition, "attached_pic") == 1;
 
-    private static string RequireCodec(JsonElement stream)
+    internal static string RequireCodec(JsonElement stream)
     {
         var codec = Text(stream, "codec_name");
         if (codec is not { Length: > 0 and <= 64 } or "unknown" or "none"
@@ -291,10 +295,10 @@ public sealed class FfprobeVideoDecoder(string executablePath)
         return codec;
     }
 
-    private static int? Integer(JsonElement value, string name) => value.TryGetProperty(name, out var property)
+    internal static int? Integer(JsonElement value, string name) => value.TryGetProperty(name, out var property)
         && property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out var result) ? result : null;
 
-    private static int RequiredInteger(JsonElement value, string name, int minimum) =>
+    internal static int RequiredInteger(JsonElement value, string name, int minimum) =>
         Integer(value, name) is { } result && result >= minimum ? result : throw new PhotoContentInvalidException();
 
     private static int? Rotation(JsonElement stream)
@@ -323,7 +327,7 @@ public sealed class FfprobeVideoDecoder(string executablePath)
         throw new PhotoContentInvalidException();
     }
 
-    private static string? Text(JsonElement value, string name) => value.ValueKind == JsonValueKind.Object
+    internal static string? Text(JsonElement value, string name) => value.ValueKind == JsonValueKind.Object
         && value.TryGetProperty(name, out var property)
         && property.ValueKind == JsonValueKind.String ? property.GetString() : null;
 

@@ -5,7 +5,7 @@ using ScrapBook.Domain.Models;
 
 namespace ScrapBook.Infrastructure.Repositories;
 
-public sealed class MediaAudioRepository(MediaPreparationRepository repository) : IMediaAudioRepository
+public sealed class MediaAudioRepository(MediaPreparationRepository repository, MediaAudioSettings settings) : IMediaAudioRepository
 {
     public Task<IEventTransaction> BeginAsync(CancellationToken cancellationToken) => repository.BeginAsync(cancellationToken);
 
@@ -22,7 +22,7 @@ public sealed class MediaAudioRepository(MediaPreparationRepository repository) 
                 j.attempt_count AS "AttemptCount", j.retry_cycle AS "RetryCycle",
                 j.confirmation_message_id AS "ConfirmationMessageId", j.confirmation_correlation_id AS "ConfirmationCorrelationId",
                 j.confirmed_at AS "ConfirmedAt", a.active_id AS "ActiveAttemptId", COALESCE(a.last_number, 0) AS "LastAttemptNumber",
-                j.profile::text AS "Profile"
+                j.profile::text AS "Profile", f.kind AS "FileKind"
             FROM scrapbook.processing_jobs AS j
             JOIN scrapbook.files AS f ON f.id = j.processing_jobs_files_id AND f.profile_version = j.profile_version
             JOIN scrapbook.records AS r ON r.id = f.files_records_id
@@ -32,7 +32,8 @@ public sealed class MediaAudioRepository(MediaPreparationRepository repository) 
                 FROM scrapbook.processing_attempts
                 WHERE processing_attempts_processing_jobs_id = j.id
             ) AS a
-            WHERE j.kind = 'av_transcode' AND f.kind = 'audio' AND f.processing_state IN ('pending', 'processing')
+            WHERE j.kind = 'av_transcode' AND (f.kind = 'audio' OR ({settings.VideoEnabled} AND f.kind = 'video'))
+                AND f.processing_state IN ('pending', 'processing')
                 AND j.state IN ('pending', 'running', 'reconciling') AND j.confirmed_at IS NOT NULL
                 AND j.next_attempt_at <= {now} AND (j.lease_until IS NULL OR j.lease_until <= {now})
             ORDER BY j.next_attempt_at, j.id
@@ -89,7 +90,7 @@ public sealed class MediaAudioRepository(MediaPreparationRepository repository) 
                 SET processing_state = 'processing', updated_at = {now}, version = version + 1
                 FROM attempt
                 WHERE f.id = attempt.processing_attempts_files_id AND f.profile_version = {job.ProfileVersion}
-                    AND f.kind = 'audio' AND f.processing_state IN ('pending', 'processing')
+                    AND f.kind = {job.FileKind} AND f.processing_state IN ('pending', 'processing')
                 RETURNING f.id
             )
             SELECT attempt.id AS "Value" FROM attempt
@@ -116,7 +117,7 @@ public sealed class MediaAudioRepository(MediaPreparationRepository repository) 
             WHERE j.id = {work.Job.Id} AND j.version = {work.Job.Version} AND j.kind = 'av_transcode'
                 AND j.state IN ('running', 'reconciling') AND j.lease_token = {work.Lease}
                 AND j.lease_until > {requiredUntil} AND j.lease_until > clock_timestamp()
-                AND f.id = {work.Job.FileId} AND f.kind = 'audio' AND f.processing_state = 'processing'
+                AND f.id = {work.Job.FileId} AND f.kind = {work.Job.FileKind} AND f.processing_state = 'processing'
                 AND f.profile_version = {work.Job.ProfileVersion}
                 AND a.id = {work.Attempt.Id} AND a.request_key = {work.Attempt.RequestKey}
                 AND a.output_prefix = {work.Attempt.OutputPrefix} AND a.provider = 'mediaconvert'
@@ -182,6 +183,9 @@ public sealed class MediaAudioRepository(MediaPreparationRepository repository) 
             UPDATE scrapbook.file_variants AS v
             SET state = 'ready', file_variants_storage_objects_id = verified.id, media_type = {variant.MediaType},
                 container = {variant.Container}, audio_codec = {variant.AudioCodec}, duration = {variant.Duration},
+                video_codec = {variant.Video?.VideoCodec}, width = {variant.Video?.Width}, height = {variant.Video?.Height},
+                frame_rate_numerator = {variant.Video?.FrameRateNumerator},
+                frame_rate_denominator = {variant.Video?.FrameRateDenominator},
                 location_removed = true, ready_at = {now}, updated_at = {now}, version = version + 1, error_code = NULL
             FROM verified
             WHERE v.file_variants_files_id = {work.Job.FileId} AND v.profile_version = {work.Job.ProfileVersion}
@@ -195,13 +199,14 @@ public sealed class MediaAudioRepository(MediaPreparationRepository repository) 
     public Task<MediaAudioWakeModel?> FindAudioWakeAsync(Guid requestKey, CancellationToken cancellationToken) =>
         repository.QueryAsync<MediaAudioWakeModel>($"""
             SELECT j.id AS "JobId", a.id AS "AttemptId", j.profile::text AS "Profile", a.provider_job_id AS "ProviderJobId",
-                j.confirmation_correlation_id AS "CorrelationId", f.id AS "FileId"
+                j.confirmation_correlation_id AS "CorrelationId", f.id AS "FileId", f.kind AS "FileKind"
             FROM scrapbook.processing_attempts AS a
             JOIN scrapbook.processing_jobs AS j ON j.id = a.processing_attempts_processing_jobs_id
             JOIN scrapbook.files AS f ON f.id = j.processing_jobs_files_id AND f.profile_version = j.profile_version
             WHERE a.request_key = {requestKey} AND a.provider = 'mediaconvert' AND a.provider_submit_started_at IS NOT NULL
                 AND a.state IN ('submitted', 'running', 'unknown')
-                AND j.kind = 'av_transcode' AND j.state IN ('running', 'reconciling') AND f.kind = 'audio'
+                AND j.kind = 'av_transcode' AND j.state IN ('running', 'reconciling')
+                AND (f.kind = 'audio' OR ({settings.VideoEnabled} AND f.kind = 'video'))
             """, cancellationToken);
 
     public Task<bool> WakeAudioAsync(MediaAudioWakeModel target, Guid requestKey, string providerJobId, byte[] providerJobHash,
@@ -213,7 +218,7 @@ public sealed class MediaAudioRepository(MediaPreparationRepository repository) 
                 JOIN scrapbook.processing_attempts AS a ON a.processing_attempts_processing_jobs_id = j.id
                 JOIN scrapbook.files AS f ON f.id = j.processing_jobs_files_id AND f.profile_version = j.profile_version
                 WHERE j.id = {target.JobId} AND j.kind = 'av_transcode' AND j.state IN ('running', 'reconciling')
-                    AND f.id = {target.FileId} AND f.kind = 'audio' AND f.processing_state = 'processing'
+                    AND f.id = {target.FileId} AND f.kind = {target.FileKind} AND f.processing_state = 'processing'
                     AND a.id = {target.AttemptId} AND a.request_key = {requestKey} AND a.provider = 'mediaconvert'
                     AND a.provider_submit_started_at IS NOT NULL AND a.state IN ('submitted', 'running', 'unknown')
                     AND (a.provider_job_id IS NULL OR a.provider_job_id = {providerJobId})

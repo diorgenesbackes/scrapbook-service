@@ -11,12 +11,15 @@ using static ScrapBook.Application.Services.MediaConfirmationService;
 namespace ScrapBook.Application.Services;
 
 public sealed class MediaAudioPreparationService(IMediaAudioRepository repository, IMediaAudioStorage storage,
-    IMediaTranscodingProvider provider, MediaAudioSettings settings, TimeProvider clock)
+    IMediaTranscodingProvider provider, MediaAudioSettings settings, TimeProvider clock, IMediaVideoStorage? videoStorage = null)
 {
     private const int MaximumAttempts = 5;
     private const int MaximumOriginalBytes = 50_000_000;
     private const int MaximumStagingBytes = 64_000_000;
     private const int MaximumPlaybackBytes = 10_000_000;
+    private const int MaximumVideoOriginalBytes = 500_000_000;
+    private const int MaximumVideoStagingBytes = 512_000_000;
+    private const int MaximumVideoPlaybackBytes = 200_000_000;
     private const int SampleRate = 48_000;
     private static readonly int[] RetrySeconds = [5, 15, 30, 60];
     private static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(2);
@@ -24,8 +27,10 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
     private static readonly TimeSpan ProviderBudget = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan SubmitWindow = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan ReconciliationHorizon = TimeSpan.FromHours(24);
-    private static readonly Meter Meter = new("ScrapBook.MediaAudio");
-    private static readonly Counter<long> Interventions = Meter.CreateCounter<long>("scrapbook.media.audio.intervention");
+    private static readonly Meter AudioMeter = new("ScrapBook.MediaAudio");
+    private static readonly Meter VideoMeter = new("ScrapBook.MediaVideo");
+    private static readonly Counter<long> AudioInterventions = AudioMeter.CreateCounter<long>("scrapbook.media.audio.intervention");
+    private static readonly Counter<long> VideoInterventions = VideoMeter.CreateCounter<long>("scrapbook.media.video.intervention");
 
     public async Task<bool> PrepareNextAsync(CancellationToken cancellationToken)
     {
@@ -46,18 +51,18 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             return false;
         }
         var target = await repository.FindAudioWakeAsync(callback.RequestKey, cancellationToken);
-        if (target is null) return false;
+        if (target is null || !CanProcessFile(target.FileKind)) return false;
         var plan = ReadPlan(target.Profile);
         if (plan.Settings.Account != callback.Account || plan.Settings.Region != callback.Region
             || plan.Settings.QueueArn != callback.QueueArn
-            || !MatchesInputPlan(plan, target.FileId, callback.RequestKey)
+            || !MatchesInputPlan(plan, target.FileId, target.FileKind, callback.RequestKey)
             || target.ProviderJobId is { } previous && previous != callback.JobId)
         {
             return false;
         }
         var job = await GetJobAsync(callback.JobId, cancellationToken);
         if (job is null) throw new MediaProviderUnavailableException();
-        var request = Request(plan, target.FileId, callback.RequestKey);
+        var request = Request(plan, target.FileId, target.FileKind, callback.RequestKey);
         if (!MatchesProvider(job, request, callback.JobId)) return false;
 
         var externalId = $"{callback.Account}:{callback.Region}:{callback.JobId}:{callback.State}";
@@ -71,12 +76,13 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
         await using var transaction = await repository.BeginAsync(cancellationToken);
         var now = clock.GetUtcNow();
         var job = await repository.FindEligibleAudioAsync(now, cancellationToken);
-        if (job is null) return (false, null);
+        if (job is null || !CanProcessFile(job.FileKind)) return (false, null);
 
         var confirmation = Confirmation(job);
         var source = await repository.FindSourceAsync(confirmation, true, cancellationToken);
         if (!MatchesSource(confirmation, source)
-            || source is not { Kind: "audio", Size: <= MaximumOriginalBytes, ProcessingState: "pending" or "processing" })
+            || source is not { ProcessingState: "pending" or "processing" } || source.Kind != job.FileKind
+            || source.Size > (job.FileKind == "video" ? MaximumVideoOriginalBytes : MaximumOriginalBytes))
         {
             source = null;
         }
@@ -106,7 +112,8 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             plan = new MediaAudioPlanModel(settings, source.Bucket, null, null);
             var number = job.LastAttemptNumber + 1;
             var newId = await repository.StartAudioAsync(job, JsonSerializer.Serialize(plan), plan.Bucket, lease, leaseUntil,
-                requestKey, InputKey(job.FileId, requestKey), prefix, prefix + "playback.m4a", number, now, cancellationToken);
+                requestKey, InputKey(job.FileId, requestKey), prefix, OutputKey(job.FileId, job.FileKind, requestKey),
+                number, now, cancellationToken);
             attempt = new MediaAudioAttemptEntity(newId, requestKey, prefix, now, null, null, "created");
             job = job with { AttemptCount = job.AttemptCount + 1, LastAttemptNumber = number, ActiveAttemptId = newId };
         }
@@ -121,19 +128,19 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             await DeferAsync(work, null, "MEDIA_PROVIDER_SCOPE_CHANGED", cancellationToken);
             return;
         }
-        if (work.Plan.Input is null)
+        if (work.Plan.Profile is null)
         {
             var staged = await StageAsync(work, cancellationToken);
             if (staged is null) return;
             work = staged;
         }
         if (work.Attempt.OutputPrefix != OutputPrefix(work.Job.FileId, work.Attempt.RequestKey)
-            || !MatchesInputPlan(work.Plan, work.Job.FileId, work.Attempt.RequestKey))
+            || !MatchesInputPlan(work.Plan, work.Job.FileId, work.Job.FileKind, work.Attempt.RequestKey))
         {
             await DeferAsync(work, null, "MEDIA_INPUT_RECONCILIATION_REQUIRED", cancellationToken);
             return;
         }
-        var request = Request(work.Plan, work.Job.FileId, work.Attempt.RequestKey);
+        var request = Request(work.Plan, work.Job.FileId, work.Job.FileKind, work.Attempt.RequestKey);
         if (work.Attempt.ProviderJobId is { } jobId)
         {
             await ReconcileKnownAsync(work, request, jobId, cancellationToken);
@@ -161,14 +168,13 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             return null;
         }
         var key = InputKey(work.Job.FileId, work.Attempt.RequestKey);
-        MediaAudioInputModel input;
+        MediaAudioPlanModel plan;
         using var timeout = new CancellationTokenSource(LocalBudget, clock);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         try
         {
-            input = await storage.StageAsync(source, key, linked.Token);
-            if (!ValidObject(input.Object, work.Plan.Bucket, key, MaximumStagingBytes)
-                || input.Duration is <= 0 or > 300 || input.Channels is not (1 or 2))
+            plan = await BuildInputPlanAsync(work.Plan, source, key, linked.Token);
+            if (!MatchesInputPlan(plan, work.Job.FileId, work.Job.FileKind, work.Attempt.RequestKey))
             {
                 throw new MediaOutputInvalidException();
             }
@@ -190,13 +196,30 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             return null;
         }
 
-        var plan = work.Plan with { Input = input, Profile = EffectiveProfile(work.Plan.Settings, input.Channels) };
         await using var transaction = await repository.BeginAsync(cancellationToken);
         var now = clock.GetUtcNow();
         if (!await repository.RetainAudioLeaseAsync(work, now, cancellationToken)) return null;
-        await repository.SetAudioInputAsync(work, input.Object, JsonSerializer.Serialize(plan), now, cancellationToken);
+        await repository.SetAudioInputAsync(work, StagedObject(plan), JsonSerializer.Serialize(plan), now, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return work with { Plan = plan };
+    }
+
+    private async Task<MediaAudioPlanModel> BuildInputPlanAsync(MediaAudioPlanModel plan, MediaSourceEntity source, string key,
+        CancellationToken cancellationToken)
+    {
+        if (source.Kind == "video")
+        {
+            var videoInput = await videoStorage!.StageAsync(source, key, cancellationToken);
+            var videoProfile = MediaVideoProfileService.Create(videoInput.Properties) ?? throw new MediaOutputInvalidException();
+            return plan with
+            {
+                VideoInput = videoInput,
+                VideoProfile = videoProfile,
+                Profile = EffectiveProfile(plan.Settings, Math.Min(videoInput.Properties.AudioChannels, 2))
+            };
+        }
+        var audioInput = await storage.StageAsync(source, key, cancellationToken);
+        return plan with { Input = audioInput, Profile = EffectiveProfile(plan.Settings, audioInput.Channels) };
     }
 
     private async Task SubmitAsync(MediaAudioWorkModel work, MediaAudioRequestModel request, CancellationToken cancellationToken)
@@ -343,11 +366,10 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         try
         {
-            variant = await storage.VerifyAsync(request.Bucket, request.OutputKey, linked.Token);
-            if (!ValidObject(variant.Object, request.Bucket, request.OutputKey, MaximumPlaybackBytes)
-                || variant.MediaType != "audio/mp4" || variant.Container != "m4a" || variant.AudioCodec != "aac"
-                || variant.Channels != request.Profile.Channels || variant.SampleRate != request.Profile.SampleRate
-                || variant.Duration <= 0 || Math.Abs(variant.Duration - work.Plan.Input!.Duration) > 0.250m)
+            variant = await (request.Video is null
+                ? storage.VerifyAsync(request.Bucket, request.OutputKey, linked.Token)
+                : videoStorage!.VerifyAsync(request.Bucket, request.OutputKey, linked.Token));
+            if (!MatchesVariant(work.Plan, request, variant))
             {
                 throw new MediaOutputInvalidException();
             }
@@ -406,7 +428,10 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
         await repository.SetAudioAttemptAsync(work.Attempt.Id, state, providerId, providerHash, errorCode, null, now, cancellationToken);
         await repository.ReleaseAudioLeaseAsync(work, jobState, errorCode, next, now, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        if (intervention) Interventions.Add(1);
+        if (intervention)
+        {
+            (work.Job.FileKind == "video" ? VideoInterventions : AudioInterventions).Add(1);
+        }
     }
 
     private async Task FailAttemptAsync(MediaAudioWorkModel work, string stage, string code, bool retryable,
@@ -443,7 +468,9 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
         try
         {
             return JsonSerializer.Deserialize<MediaAudioPlanModel>(profile) is { Settings: not null, Bucket.Length: > 0 } plan
-                && (plan.Input is null) == (plan.Profile is null)
+                && (plan.Input is null && plan.VideoInput is null) == (plan.Profile is null)
+                && (plan.VideoInput is null) == (plan.VideoProfile is null)
+                && (plan.VideoInput is null || plan.Input is null)
                 ? plan : throw new MediaPreparationWriteException();
         }
         catch (JsonException)
@@ -452,17 +479,45 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
         }
     }
 
-    private static bool MatchesInputPlan(MediaAudioPlanModel plan, long fileId, Guid requestKey) =>
-        plan.Input is { Duration: > 0 and <= 300, Channels: 1 or 2 } input
-        && plan.Profile == EffectiveProfile(plan.Settings, input.Channels)
-        && ValidObject(input.Object, plan.Bucket, InputKey(fileId, requestKey), MaximumStagingBytes);
+    private bool CanProcessFile(string kind) =>
+        kind == "audio" || kind == "video" && settings.VideoEnabled && videoStorage is not null;
 
-    private static MediaAudioRequestModel Request(MediaAudioPlanModel plan, long fileId, Guid requestKey) =>
-        new(requestKey, plan.Bucket, plan.Input!.Object.Key, OutputPrefix(fileId, requestKey) + "playback.m4a", plan.Profile!);
+    private static bool MatchesInputPlan(MediaAudioPlanModel plan, long fileId, string kind, Guid requestKey)
+    {
+        var key = InputKey(fileId, requestKey);
+        if (kind == "video")
+        {
+            return plan.VideoInput is { Properties: { } source } video && plan.VideoProfile is { } profile
+                && profile == MediaVideoProfileService.Create(source)
+                && plan.Profile == EffectiveProfile(plan.Settings, Math.Min(source.AudioChannels, 2))
+                && ValidObject(video.Object, plan.Bucket, key, MaximumVideoStagingBytes);
+        }
+        return plan.Input is { Duration: > 0 and <= 300, Channels: 1 or 2 } audio
+            && plan.Profile == EffectiveProfile(plan.Settings, audio.Channels)
+            && ValidObject(audio.Object, plan.Bucket, key, MaximumStagingBytes);
+    }
+
+    private static bool MatchesVariant(MediaAudioPlanModel plan, MediaAudioRequestModel request, MediaAudioVariantModel variant)
+    {
+        if (request.Video is { } video)
+        {
+            return ValidObject(variant.Object, request.Bucket, request.OutputKey, MaximumVideoPlaybackBytes)
+                && MediaVideoProfileService.MatchesOutput(variant, plan.VideoInput!.Properties, video, request.Profile);
+        }
+        return ValidObject(variant.Object, request.Bucket, request.OutputKey, MaximumPlaybackBytes)
+            && variant.MediaType == "audio/mp4" && variant.Container == "m4a" && variant.AudioCodec == "aac"
+            && variant.Channels == request.Profile.Channels && variant.SampleRate == request.Profile.SampleRate
+            && variant.Duration > 0 && Math.Abs(variant.Duration - plan.Input!.Duration) <= 0.250m;
+    }
+
+    private static MediaAudioRequestModel Request(MediaAudioPlanModel plan, long fileId, string kind, Guid requestKey) =>
+        new(requestKey, plan.Bucket, StagedObject(plan).Key, OutputKey(fileId, kind, requestKey), plan.Profile!, plan.VideoProfile);
+
+    private static MediaStoredVariantModel StagedObject(MediaAudioPlanModel plan) => plan.VideoInput?.Object ?? plan.Input!.Object;
 
     private static MediaAudioProfileModel EffectiveProfile(MediaAudioSettings target, int channels) =>
-        new(target.Account, target.Region, target.QueueArn, target.JobRoleArn, SampleRate, channels,
-            channels == 1 ? 96_000 : 128_000);
+        new(target.Account, target.Region, target.QueueArn, target.JobRoleArn, channels == 0 ? 0 : SampleRate, channels,
+            channels switch { 0 => 0, 1 => 96_000, _ => 128_000 });
 
     private static TimeSpan ReconciliationDelay(TimeSpan age) => age.TotalHours >= 1 ? TimeSpan.FromMinutes(5)
         : age.TotalMinutes >= 5 ? TimeSpan.FromMinutes(1) : TimeSpan.FromSeconds(15);
@@ -479,22 +534,25 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             && (job.JobRoleArn is null || job.JobRoleArn == request.Profile.JobRoleArn)
             && (job.ClientRequestToken is null || job.ClientRequestToken == request.RequestKey.ToString("N"))
             && (job.InputUri is null || job.InputUri == $"s3://{request.Bucket}/{request.InputKey}")
-            && (job.OutputDestination is null || job.OutputDestination == output[..^".m4a".Length])
+            && (job.OutputDestination is null || job.OutputDestination == output[..output.LastIndexOf('.')])
             && (job.OutputUri is null || job.OutputUri == output);
     }
 
     private static bool ValidJobId(string id) => id.Length is > 0 and <= 128
         && id.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
-    private static bool ValidObject(MediaStoredVariantModel value, string bucket, string key, int maximumBytes) =>
-        value.Bucket == bucket && value.Key == key && IsVersioned(value.VersionId) && value.LastModifiedAt != default
-        && value.Size > 0 && value.Size <= maximumBytes && value.Sha256.Length == 32;
+    private static bool ValidObject(MediaStoredVariantModel? value, string bucket, string key, int maximumBytes) =>
+        value is { Size: > 0, Sha256.Length: 32 } && value.Bucket == bucket && value.Key == key
+        && IsVersioned(value.VersionId) && value.LastModifiedAt != default && value.Size <= maximumBytes;
 
     private static string InputKey(long fileId, Guid requestKey) =>
         FormattableString.Invariant($"submissions/transcode-input/{fileId}/{requestKey:N}/input");
 
     private static string OutputPrefix(long fileId, Guid requestKey) =>
         FormattableString.Invariant($"submissions/transcode-output/{fileId}/{requestKey:N}/");
+
+    private static string OutputKey(long fileId, string kind, Guid requestKey) =>
+        OutputPrefix(fileId, requestKey) + (kind == "video" ? "playback.mp4" : "playback.m4a");
 
     private static byte[] ProviderHash(MediaAudioSettings scope, string jobId) => Hash($"{scope.Account}:{scope.Region}:{jobId}");
 
