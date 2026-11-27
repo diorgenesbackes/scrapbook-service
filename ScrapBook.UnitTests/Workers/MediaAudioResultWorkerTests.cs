@@ -20,12 +20,17 @@ public sealed class MediaAudioResultWorkerTests
         const string unavailable = ProviderJobId + "-unavailable";
         var repository = InFlight(Now.AddSeconds(-30));
         var lookupStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var unavailableLookupStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseLookup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var provider = new MediaTranscodingProviderStub
         {
             Get = async (id, token) =>
             {
-                if (id == unavailable) throw new MediaProviderUnavailableException();
+                if (id == unavailable)
+                {
+                    unavailableLookupStarted.TrySetResult();
+                    throw new MediaProviderUnavailableException();
+                }
                 lookupStarted.TrySetResult();
                 await releaseLookup.Task.WaitAsync(token);
                 return ProviderJob(RequestKey, "complete", OutputKey);
@@ -47,7 +52,7 @@ public sealed class MediaAudioResultWorkerTests
         await worker.StartAsync(CancellationToken.None);
         try
         {
-            await lookupStarted.Task.WaitAsync(WaitLimit);
+            await Task.WhenAll(lookupStarted.Task, unavailableLookupStarted.Task).WaitAsync(WaitLimit);
             Assert.Empty(queue.Acknowledgements);
             Assert.Empty(repository.Wakes);
             releaseLookup.SetResult();
