@@ -343,9 +343,9 @@ public sealed class MediaAudioPreparationServiceTests
         Assert.Empty(provider.Submissions);
         Assert.Equal(repository.Attempt!.Id, repository.Job!.ActiveAttemptId);
         Assert.Equal("unknown", repository.Attempt.State);
-        Assert.Equal(
-            ("reconciling", "MEDIA_RECONCILIATION_INTERVENTION_REQUIRED", Now.AddMinutes(5)),
-            (Assert.Single(repository.Releases).State, repository.Releases[0].Code, repository.Releases[0].At));
+        var release = Assert.Single(repository.Releases);
+        Assert.Equal(("reconciling", "MEDIA_RECONCILIATION_INTERVENTION_REQUIRED", Now.AddMinutes(5)),
+            (release.State, release.Code, release.At));
         Assert.Empty(repository.Failures);
     }
 
@@ -441,6 +441,99 @@ public sealed class MediaAudioPreparationServiceTests
         Assert.Empty(provider.Submissions);
         Assert.Equal("MEDIA_SOURCE_INTEGRITY", Assert.Single(repository.States).Code);
         Assert.Single(repository.Failures);
+    }
+
+    [Theory]
+    [InlineData("key")]
+    [InlineData("version")]
+    [InlineData("profile")]
+    [InlineData("duration")]
+    [InlineData("prefix")]
+    public async Task IncorrectRecoveredPlanCannotReachMediaConvertAsync(string difference)
+    {
+        var repository = InFlight(Now.AddSeconds(-1));
+        var job = repository.Job!;
+        var plan = JsonSerializer.Deserialize<MediaAudioPlanModel>(job.Profile)!;
+        var input = plan.Input!;
+        if (difference == "prefix")
+            repository.Attempt = repository.Attempt! with { OutputPrefix = OutputPrefix.Replace("701", "702", StringComparison.Ordinal) };
+        plan = difference switch
+        {
+            "key" => plan with { Input = input with { Object = input.Object with { Key = OutputKey } } },
+            "version" => plan with { Input = input with { Object = input.Object with { VersionId = "null" } } },
+            "profile" => plan with { Profile = Profile with { SampleRate = 44100 } },
+            "duration" => plan with { Input = input with { Duration = 0 } },
+            _ => plan
+        };
+        repository.Job = job with { Profile = JsonSerializer.Serialize(plan) };
+        var storage = new MediaAudioStorageStub();
+        var provider = new MediaTranscodingProviderStub();
+
+        Assert.True(await Service(repository, storage, provider).PrepareNextAsync(CancellationToken.None));
+
+        Assert.Equal("MEDIA_INPUT_RECONCILIATION_REQUIRED", Assert.Single(repository.Releases).Code);
+        Assert.Equal(repository.Attempt!.Id, repository.Job.ActiveAttemptId);
+        Assert.Empty(provider.Searches);
+        Assert.Empty(provider.Reads);
+        Assert.Empty(provider.Submissions);
+        Assert.Empty(storage.Staged);
+        Assert.Empty(repository.Failures);
+    }
+
+    [Theory]
+    [InlineData("unavailable", "MEDIA_SOURCE_UNAVAILABLE", "processing")]
+    [InlineData("integrity", "MEDIA_SOURCE_INTEGRITY", "failed")]
+    [InlineData("invalid", "MEDIA_SOURCE_INVALID", "failed")]
+    public async Task ClassifiesStagingFailureBeforeSubmissionAsync(string difference, string code, string fileState)
+    {
+        var repository = new MediaAudioRepositoryStub();
+        var provider = new MediaTranscodingProviderStub();
+        var storage = new MediaAudioStorageStub
+        {
+            Stage = (_, _, _) => throw difference switch
+            {
+                "unavailable" => (Exception)new MediaVariantStorageException(),
+                "integrity" => new MediaSourceIntegrityException(),
+                _ => new MediaOutputInvalidException()
+            }
+        };
+
+        Assert.True(await Service(repository, storage, provider).PrepareNextAsync(CancellationToken.None));
+
+        var transition = Assert.Single(repository.States);
+        Assert.Equal((code, fileState), (transition.Code, transition.FileState));
+        Assert.Empty(repository.Inputs);
+        Assert.Empty(repository.Submissions);
+        Assert.Empty(provider.Submissions);
+        if (fileState == "failed")
+            Assert.Single(repository.Failures);
+        else
+            Assert.Empty(repository.Failures);
+    }
+
+    [Fact]
+    public async Task TerminalLookupSchedulesAnImmediateAuthoritativeGetBeforeVerificationAsync()
+    {
+        var repository = InFlight(Now.AddMinutes(-2));
+        var storage = new MediaAudioStorageStub();
+        var provider = new MediaTranscodingProviderStub
+        {
+            Find = (_, _, _) => Task.FromResult<MediaProviderJobModel?>(ProviderJob(RequestKey, "complete", OutputKey)),
+            Get = (_, _) => Task.FromResult<MediaProviderJobModel?>(ProviderJob(RequestKey, "complete", OutputKey))
+        };
+        var service = Service(repository, storage, provider);
+
+        Assert.True(await service.PrepareNextAsync(CancellationToken.None));
+
+        Assert.Empty(storage.Verified);
+        Assert.Equal(Now, Assert.Single(repository.Releases).At);
+        Assert.Equal(ProviderJobId, repository.Attempt!.ProviderJobId);
+
+        Assert.True(await service.PrepareNextAsync(CancellationToken.None));
+
+        Assert.Empty(provider.Submissions);
+        Assert.Single(provider.Reads);
+        Assert.Single(repository.Promotions);
     }
 
     private static MediaAudioPreparationService Service(MediaAudioRepositoryStub repository, MediaAudioStorageStub storage,
