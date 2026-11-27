@@ -223,6 +223,10 @@ public sealed class MediaAudioPreparationServiceTests
     [InlineData("key")]
     [InlineData("bucket")]
     [InlineData("job")]
+    [InlineData("role")]
+    [InlineData("client-token")]
+    [InlineData("input-uri")]
+    [InlineData("destination")]
     public async Task ProviderCompletionMustMatchTheLocalAttemptAndArtifactAsync(string difference)
     {
         var repository = InFlight(Now.AddMinutes(-1), ProviderJobId);
@@ -234,6 +238,10 @@ public sealed class MediaAudioPreparationServiceTests
             "request" => valid with { RequestKey = Guid.Empty },
             "key" => valid with { OutputUri = $"s3://{Bucket}/submissions/transcode-output/702/{RequestKey:N}/playback.m4a" },
             "bucket" => valid with { OutputUri = $"s3://other-bucket/{OutputKey}" },
+            "role" => valid with { JobRoleArn = Settings.JobRoleArn + "-other" },
+            "client-token" => valid with { ClientRequestToken = Guid.Empty.ToString("N") },
+            "input-uri" => valid with { InputUri = $"s3://{Bucket}/submissions/transcode-input/702/{RequestKey:N}/input" },
+            "destination" => valid with { OutputDestination = $"s3://other-bucket/{OutputKey[..^4]}" },
             _ => valid with { Id = ProviderJobId + "-other" }
         };
         var provider = new MediaTranscodingProviderStub { Get = (_, _) => Task.FromResult<MediaProviderJobModel?>(other) };
@@ -242,7 +250,8 @@ public sealed class MediaAudioPreparationServiceTests
 
         Assert.Empty(storage.Verified);
         Assert.Empty(repository.Promotions);
-        Assert.DoesNotContain(repository.States, state => state.FileState == "available");
+        Assert.Empty(repository.Failures);
+        Assert.Equal("MEDIA_PROVIDER_RESULT_UNVERIFIED", Assert.Single(repository.Releases).Code);
     }
 
     [Theory]
@@ -534,6 +543,31 @@ public sealed class MediaAudioPreparationServiceTests
         Assert.Empty(provider.Submissions);
         Assert.Single(provider.Reads);
         Assert.Single(repository.Promotions);
+    }
+
+    [Fact]
+    public async Task AssociatesTheFullProviderClaimWithItsLocallyStagedInputAndOutputAsync()
+    {
+        var repository = InFlight(Now.AddMinutes(-1), ProviderJobId);
+        var plan = JsonSerializer.Deserialize<MediaAudioPlanModel>(repository.Job!.Profile)!;
+        var completed = ProviderJob(RequestKey, "complete", OutputKey) with
+        {
+            JobRoleArn = Settings.JobRoleArn,
+            ClientRequestToken = RequestKey.ToString("N"),
+            InputUri = $"s3://{Bucket}/{plan.Input!.Object.Key}",
+            OutputDestination = $"s3://{Bucket}/{OutputKey[..^4]}"
+        };
+        var provider = new MediaTranscodingProviderStub
+        {
+            Get = (_, _) => Task.FromResult<MediaProviderJobModel?>(completed)
+        };
+        var storage = new MediaAudioStorageStub();
+
+        Assert.True(await Service(repository, storage, provider).PrepareNextAsync(CancellationToken.None));
+
+        Assert.Single(storage.Verified);
+        Assert.Single(repository.Promotions);
+        Assert.Equal("available", Assert.Single(repository.States).FileState);
     }
 
     private static MediaAudioPreparationService Service(MediaAudioRepositoryStub repository, MediaAudioStorageStub storage,
