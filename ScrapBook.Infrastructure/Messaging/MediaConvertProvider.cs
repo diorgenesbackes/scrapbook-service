@@ -218,10 +218,8 @@ public sealed class MediaConvertProvider(IAmazonMediaConvert client) : IMediaTra
 
     private static VideoDescription PlaybackVideo(MediaVideoProfileModel profile)
     {
-        if (profile.Width is < 2 or > 1920 || profile.Height is < 2 or > 1920
-            || profile.Width % 2 != 0 || profile.Height % 2 != 0
-            || profile.FrameRateNumerator <= 0 || profile.FrameRateDenominator <= 0
-            || profile.FrameRateNumerator > 30L * profile.FrameRateDenominator)
+        if (profile.Width <= 0 || profile.Height <= 0 || profile.Width % 2 != 0 || profile.Height % 2 != 0
+            || profile.FrameRateNumerator <= 0 || profile.FrameRateDenominator <= 0)
             throw new MediaJobRejectedException(false);
 
         return new VideoDescription
