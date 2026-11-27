@@ -209,17 +209,31 @@ public sealed class MediaConvertProvider(IAmazonMediaConvert client) : IMediaTra
             "CANCELED" => "canceled",
             _ => throw new MediaProviderUnavailableException()
         };
-        return new MediaProviderJobModel(id, queue, requestKey, state, state == "complete" ? ReadOutputUri(job) : null);
+        var (destination, outputUri) = ReadOutputUris(job);
+        return new MediaProviderJobModel(id, queue, requestKey, state, outputUri, job.Role, job.ClientRequestToken,
+            ReadInputUri(job), destination);
     }
 
-    private static string? ReadOutputUri(Job job)
+    private static string? ReadInputUri(Job job) => job.Settings?.Inputs switch
     {
-        if (job.Settings?.OutputGroups is null) return null;
-        if (job.Settings.OutputGroups is not [var group] || group.Outputs is not [var output]
-            || group.OutputGroupSettings?.FileGroupSettings?.Destination is not { Length: > 0 } destination
-            || output.Extension is not { Length: > 0 } extension) throw new MediaProviderUnavailableException();
+        null => null,
+        [var input] => input.FileInput,
+        _ => throw new MediaProviderUnavailableException()
+    };
 
-        return destination + output.NameModifier + "." + extension;
+    private static (string? Destination, string? OutputUri) ReadOutputUris(Job job)
+    {
+        if (job.Settings?.OutputGroups is not { } groups) return (null, null);
+        if (groups is not [var group]
+            || group.OutputGroupSettings?.Type is { } type && type != OutputGroupType.FILE_GROUP_SETTINGS)
+            throw new MediaProviderUnavailableException();
+
+        var destination = group.OutputGroupSettings?.FileGroupSettings?.Destination;
+        if (group.Outputs is not { } outputs) return (destination, null);
+        if (outputs is not [var output] || output.Extension is not (null or PlaybackExtension)
+            || !string.IsNullOrEmpty(output.NameModifier)) throw new MediaProviderUnavailableException();
+
+        return (destination, destination is not null && output.Extension is not null ? destination + "." + PlaybackExtension : null);
     }
 
     private static bool MatchesRequest(Job response, MediaProviderJobModel job, MediaAudioRequestModel request) =>

@@ -195,7 +195,7 @@ public sealed class MediaAudioRepository(MediaPreparationRepository repository) 
     public Task<MediaAudioWakeModel?> FindAudioWakeAsync(Guid requestKey, CancellationToken cancellationToken) =>
         repository.QueryAsync<MediaAudioWakeModel>($"""
             SELECT j.id AS "JobId", a.id AS "AttemptId", j.profile::text AS "Profile", a.provider_job_id AS "ProviderJobId",
-                j.confirmation_correlation_id AS "CorrelationId"
+                j.confirmation_correlation_id AS "CorrelationId", f.id AS "FileId"
             FROM scrapbook.processing_attempts AS a
             JOIN scrapbook.processing_jobs AS j ON j.id = a.processing_attempts_processing_jobs_id
             JOIN scrapbook.files AS f ON f.id = j.processing_jobs_files_id AND f.profile_version = j.profile_version
@@ -213,7 +213,7 @@ public sealed class MediaAudioRepository(MediaPreparationRepository repository) 
                 JOIN scrapbook.processing_attempts AS a ON a.processing_attempts_processing_jobs_id = j.id
                 JOIN scrapbook.files AS f ON f.id = j.processing_jobs_files_id AND f.profile_version = j.profile_version
                 WHERE j.id = {target.JobId} AND j.kind = 'av_transcode' AND j.state IN ('running', 'reconciling')
-                    AND f.kind = 'audio' AND f.processing_state = 'processing'
+                    AND f.id = {target.FileId} AND f.kind = 'audio' AND f.processing_state = 'processing'
                     AND a.id = {target.AttemptId} AND a.request_key = {requestKey} AND a.provider = 'mediaconvert'
                     AND a.provider_submit_started_at IS NOT NULL AND a.state IN ('submitted', 'running', 'unknown')
                     AND (a.provider_job_id IS NULL OR a.provider_job_id = {providerJobId})

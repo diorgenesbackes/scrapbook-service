@@ -50,13 +50,15 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
         var plan = ReadPlan(target.Profile);
         if (plan.Settings.Account != callback.Account || plan.Settings.Region != callback.Region
             || plan.Settings.QueueArn != callback.QueueArn
+            || !MatchesInputPlan(plan, target.FileId, callback.RequestKey)
             || target.ProviderJobId is { } previous && previous != callback.JobId)
         {
             return false;
         }
         var job = await GetJobAsync(callback.JobId, cancellationToken);
         if (job is null) throw new MediaProviderUnavailableException();
-        if (!MatchesProvider(job, callback.RequestKey, callback.QueueArn, callback.JobId)) return false;
+        var request = Request(plan, target.FileId, callback.RequestKey);
+        if (!MatchesProvider(job, request, callback.JobId)) return false;
 
         var externalId = $"{callback.Account}:{callback.Region}:{callback.JobId}:{callback.State}";
         var payloadHash = Hash($"{externalId}:{callback.QueueArn}:{callback.RequestKey:N}");
@@ -125,13 +127,13 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             if (staged is null) return;
             work = staged;
         }
-        if (!MatchesPlan(work))
+        if (work.Attempt.OutputPrefix != OutputPrefix(work.Job.FileId, work.Attempt.RequestKey)
+            || !MatchesInputPlan(work.Plan, work.Job.FileId, work.Attempt.RequestKey))
         {
             await DeferAsync(work, null, "MEDIA_INPUT_RECONCILIATION_REQUIRED", cancellationToken);
             return;
         }
-        var request = new MediaAudioRequestModel(work.Attempt.RequestKey, work.Plan.Bucket,
-            work.Plan.Input!.Object.Key, work.Attempt.OutputPrefix + "playback.m4a", work.Plan.Profile!);
+        var request = Request(work.Plan, work.Job.FileId, work.Attempt.RequestKey);
         if (work.Attempt.ProviderJobId is { } jobId)
         {
             await ReconcileKnownAsync(work, request, jobId, cancellationToken);
@@ -294,7 +296,7 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             await DeferAsync(work, null, "MEDIA_PROVIDER_LOOKUP_UNAVAILABLE", cancellationToken);
             return;
         }
-        if (job is null || !MatchesProvider(job, request.RequestKey, request.Profile.QueueArn, jobId))
+        if (job is null || !MatchesProvider(job, request, jobId))
         {
             await DeferAsync(work, null, "MEDIA_PROVIDER_RESULT_UNVERIFIED", cancellationToken);
             return;
@@ -329,7 +331,7 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
 
     private Task RecordProviderAsync(MediaAudioWorkModel work, MediaAudioRequestModel request, MediaProviderJobModel job,
         CancellationToken cancellationToken) =>
-        MatchesProvider(job, request.RequestKey, request.Profile.QueueArn, work.Attempt.ProviderJobId)
+        MatchesProvider(job, request, work.Attempt.ProviderJobId)
             ? DeferAsync(work, job, null, cancellationToken)
             : DeferAsync(work, null, "MEDIA_PROVIDER_RESULT_UNVERIFIED", cancellationToken);
 
@@ -341,10 +343,6 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         try
         {
-            if (job.OutputUri is { } output && output != $"s3://{request.Bucket}/{request.OutputKey}")
-            {
-                throw new MediaOutputInvalidException();
-            }
             variant = await storage.VerifyAsync(request.Bucket, request.OutputKey, linked.Token);
             if (!ValidObject(variant.Object, request.Bucket, request.OutputKey, MaximumPlaybackBytes)
                 || variant.MediaType != "audio/mp4" || variant.Container != "m4a" || variant.AudioCodec != "aac"
@@ -454,11 +452,13 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
         }
     }
 
-    private static bool MatchesPlan(MediaAudioWorkModel work) =>
-        work.Plan.Input is { Duration: > 0 and <= 300, Channels: 1 or 2 } input
-        && work.Plan.Profile == EffectiveProfile(work.Plan.Settings, input.Channels)
-        && work.Attempt.OutputPrefix == OutputPrefix(work.Job.FileId, work.Attempt.RequestKey)
-        && ValidObject(input.Object, work.Plan.Bucket, InputKey(work.Job.FileId, work.Attempt.RequestKey), MaximumStagingBytes);
+    private static bool MatchesInputPlan(MediaAudioPlanModel plan, long fileId, Guid requestKey) =>
+        plan.Input is { Duration: > 0 and <= 300, Channels: 1 or 2 } input
+        && plan.Profile == EffectiveProfile(plan.Settings, input.Channels)
+        && ValidObject(input.Object, plan.Bucket, InputKey(fileId, requestKey), MaximumStagingBytes);
+
+    private static MediaAudioRequestModel Request(MediaAudioPlanModel plan, long fileId, Guid requestKey) =>
+        new(requestKey, plan.Bucket, plan.Input!.Object.Key, OutputPrefix(fileId, requestKey) + "playback.m4a", plan.Profile!);
 
     private static MediaAudioProfileModel EffectiveProfile(MediaAudioSettings target, int channels) =>
         new(target.Account, target.Region, target.QueueArn, target.JobRoleArn, SampleRate, channels,
@@ -470,9 +470,18 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
     private static bool CanSubmit(DateTimeOffset now, DateTimeOffset leaseUntil, DateTimeOffset startedAt) =>
         now >= startedAt && now + ProviderBudget < leaseUntil && now + ProviderBudget <= startedAt + SubmitWindow;
 
-    private static bool MatchesProvider(MediaProviderJobModel job, Guid requestKey, string queueArn, string? jobId) =>
-        ValidJobId(job.Id) && job.RequestKey == requestKey && job.QueueArn == queueArn && (jobId is null || job.Id == jobId)
-        && job.State is "submitted" or "progressing" or "complete" or "error" or "canceled";
+    private static bool MatchesProvider(MediaProviderJobModel job, MediaAudioRequestModel request, string? jobId)
+    {
+        var output = $"s3://{request.Bucket}/{request.OutputKey}";
+        return ValidJobId(job.Id) && job.RequestKey == request.RequestKey && job.QueueArn == request.Profile.QueueArn
+            && (jobId is null || job.Id == jobId)
+            && job.State is ("submitted" or "progressing" or "complete" or "error" or "canceled")
+            && (job.JobRoleArn is null || job.JobRoleArn == request.Profile.JobRoleArn)
+            && (job.ClientRequestToken is null || job.ClientRequestToken == request.RequestKey.ToString("N"))
+            && (job.InputUri is null || job.InputUri == $"s3://{request.Bucket}/{request.InputKey}")
+            && (job.OutputDestination is null || job.OutputDestination == output[..^".m4a".Length])
+            && (job.OutputUri is null || job.OutputUri == output);
+    }
 
     private static bool ValidJobId(string id) => id.Length is > 0 and <= 128
         && id.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
