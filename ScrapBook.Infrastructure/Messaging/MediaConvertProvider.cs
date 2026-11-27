@@ -224,9 +224,9 @@ public sealed class MediaConvertProvider(IAmazonMediaConvert client) : IMediaTra
 
         return new VideoDescription
         {
-            Width = profile.Width,
-            Height = profile.Height,
-            ScalingBehavior = ScalingBehavior.FIT_NO_UPSCALE,
+            Width = profile.UseSourceDimensions ? null : profile.Width,
+            Height = profile.UseSourceDimensions ? null : profile.Height,
+            ScalingBehavior = profile.UseSourceDimensions ? null : ScalingBehavior.FIT_NO_UPSCALE,
             CodecSettings = new VideoCodecSettings
             {
                 Codec = VideoCodec.H_264,
