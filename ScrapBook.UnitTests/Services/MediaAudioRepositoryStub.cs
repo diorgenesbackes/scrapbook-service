@@ -157,7 +157,7 @@ internal sealed class MediaAudioRepositoryStub : IMediaAudioRepository
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(Job is { ActiveAttemptId: not null } && Attempt is not null && Attempt.RequestKey == requestKey
-            ? new MediaAudioWakeModel(Job.Id, Attempt.Id, Job.Profile, Attempt.ProviderJobId, Job.ConfirmationCorrelationId, Job.FileId)
+            ? new MediaAudioWakeModel(Job.Id, Attempt.Id, Job.Profile, Attempt.ProviderJobId, Job.ConfirmationCorrelationId, Job.FileId, Job.FileKind)
             : null);
     }
 
