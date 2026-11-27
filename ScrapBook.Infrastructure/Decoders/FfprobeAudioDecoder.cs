@@ -32,13 +32,15 @@ public sealed class FfprobeAudioDecoder(string executablePath)
             var webm = !playback && await VideoContainerReader.IsWebmAsync(path, budget.Token);
             var metadata = await ReadMetadataAsync(path, webm, playback, budget.Token);
             using var json = JsonDocument.Parse(metadata, new JsonDocumentOptions { MaxDepth = 10 });
-            var (mediaType, container) = Container(json.RootElement.GetProperty("format"), webm);
+            var format = json.RootElement.GetProperty("format");
+            var (mediaType, container) = Container(format, webm);
             var streams = json.RootElement.GetProperty("streams");
             var tracks = AudioTracks(streams, container);
             var (primaryIndex, primary) = tracks.FirstOrDefault(track => track.Value.IsDefault);
             if (primary is null) (primaryIndex, primary) = tracks.First();
             if (playback && (container != "m4a" || streams.GetArrayLength() != 1 || primary.Codec != "aac"
-                || primary.Profile != "LC" || primary.Channels <= 0)) throw new PhotoContentInvalidException();
+                || primary.Profile != "LC" || primary.Channels <= 0 || ContainsLocation(format)
+                || streams.EnumerateArray().Any(ContainsLocation))) throw new PhotoContentInvalidException();
             if (container == "ogg") await OggPageReader.RequireCompleteAsync(path, budget.Token);
             if (!await ReadFramesAsync(path, container, tracks, budget.Token))
                 throw new PhotoContentInvalidException();
@@ -79,9 +81,11 @@ public sealed class FfprobeAudioDecoder(string executablePath)
     {
         var formats = playback ? "mov" : webm ? "matroska,webm" : "mp3,mov,wav,ogg";
         var input = AudioDecoderProcess.InputOptions(formats, playback);
-        string[] options = ["-count_packets", "-show_streams", "-show_format", "-show_entries",
-            "format=format_name:format_tags=major_brand,compatible_brands:stream=index,codec_type,codec_name,"
-            + "sample_rate,channels,profile,time_base,nb_read_packets:stream_tags=:stream_disposition=default,attached_pic",
+        var formatTags = playback ? "format_tags" : "format_tags=major_brand,compatible_brands";
+        var streamTags = playback ? "stream_tags" : "stream_tags=";
+        var entries = $"format=format_name:{formatTags}:stream=index,codec_type,codec_name,sample_rate,channels,"
+            + $"profile,time_base,nb_read_packets:{streamTags}:stream_disposition=default,attached_pic";
+        string[] options = ["-count_packets", "-show_streams", "-show_format", "-show_entries", entries,
             "-output_format", "json", "-i", path];
         return AudioDecoderProcess.RunAsync(executablePath, path, [.. input, .. options],
             (reader, token) => AudioDecoderProcess.ReadBoundedAsync(reader, MaximumMetadataOutput, token), cancellationToken);
@@ -128,6 +132,20 @@ public sealed class FfprobeAudioDecoder(string executablePath)
             ("matroska,webm", true) => ("audio/webm", "webm"),
             _ => throw new PhotoContentInvalidException()
         };
+
+    private static bool ContainsLocation(JsonElement media) => media.TryGetProperty("tags", out var tags)
+        && tags.EnumerateObject().Any(tag => IsLocationTag(tag.Name));
+
+    private static bool IsLocationTag(string name) =>
+        name.Contains("location", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("latitude", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("longitude", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("altitude", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("gps", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("iso6709", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("geotag", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("loci", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("©xyz", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsM4a(JsonElement format)
     {
