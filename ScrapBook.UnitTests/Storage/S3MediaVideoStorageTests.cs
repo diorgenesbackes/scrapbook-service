@@ -26,7 +26,7 @@ public sealed class S3MediaVideoStorageTests
         var bytes = await ReadFixtureAsync(fixture, cancellation.Token);
         var source = Source(bytes);
         using var client = new MediaAudioS3ClientStub(SourceKey, bytes) { SourceMediaType = mediaType };
-        using var storage = new S3MediaVideoStorage(client, Decoder());
+        var storage = new S3MediaVideoStorage(client, Decoder());
 
         var result = await storage.StageAsync(source, InputKey, cancellation.Token);
 
@@ -62,7 +62,7 @@ public sealed class S3MediaVideoStorageTests
         var bytes = await ReadFixtureAsync("video-variable.webm", CancellationToken.None);
         var source = Source(bytes);
         using var client = new MediaAudioS3ClientStub(SourceKey, bytes) { SourceMediaType = "video/webm", ConflictOnPut = true };
-        using var storage = new S3MediaVideoStorage(client, Decoder());
+        var storage = new S3MediaVideoStorage(client, Decoder());
         if (foreignSource)
             client.ExistingSourceHash = Convert.ToBase64String(SHA256.HashData([1, 2, 3]));
 
@@ -84,7 +84,7 @@ public sealed class S3MediaVideoStorageTests
         byte[] bytes = [1, 2, 3, 4];
         var source = Source(bytes);
         using var client = new MediaAudioS3ClientStub(SourceKey, bytes);
-        using var storage = new S3MediaVideoStorage(client, new VideoTranscodingDecoder("/unused/ffprobe"));
+        var storage = new S3MediaVideoStorage(client, new VideoTranscodingDecoder("/unused/ffprobe"));
 
         if (difference == "key")
         {
@@ -123,7 +123,7 @@ public sealed class S3MediaVideoStorageTests
         using var cancellation = new CancellationTokenSource();
         var bytes = await ReadFixtureAsync(fixture, cancellation.Token);
         using var client = new MediaAudioS3ClientStub(VideoKey, bytes) { SourceVersion = "output-version", SourceMediaType = "video/mp4" };
-        using var storage = new S3MediaVideoStorage(client, Decoder());
+        var storage = new S3MediaVideoStorage(client, Decoder());
 
         var output = await storage.VerifyAsync(Bucket, VideoKey, cancellation.Token);
 
@@ -153,7 +153,7 @@ public sealed class S3MediaVideoStorageTests
     {
         var bytes = await ReadFixtureAsync(fixture, CancellationToken.None);
         using var client = new MediaAudioS3ClientStub(VideoKey, bytes) { SourceMediaType = "video/mp4" };
-        using var storage = new S3MediaVideoStorage(client, Decoder());
+        var storage = new S3MediaVideoStorage(client, Decoder());
 
         await Assert.ThrowsAsync<MediaOutputInvalidException>(() => storage.VerifyAsync(Bucket, VideoKey, CancellationToken.None));
 
@@ -172,7 +172,7 @@ public sealed class S3MediaVideoStorageTests
             HeadVersion = headVersion,
             ReadVersion = "different-version"
         };
-        using var storage = new S3MediaVideoStorage(client, new VideoTranscodingDecoder("/unused/ffprobe"));
+        var storage = new S3MediaVideoStorage(client, new VideoTranscodingDecoder("/unused/ffprobe"));
 
         await Assert.ThrowsAsync<MediaVariantStorageException>(() => storage.VerifyAsync(Bucket, VideoKey, CancellationToken.None));
 
