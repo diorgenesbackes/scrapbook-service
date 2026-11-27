@@ -46,8 +46,9 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             return false;
         }
         var target = await repository.FindAudioWakeAsync(callback.RequestKey, cancellationToken);
-        if (target is null || ReadPlan(target.Profile) is not { } plan
-            || plan.Settings.Account != callback.Account || plan.Settings.Region != callback.Region
+        if (target is null) return false;
+        var plan = ReadPlan(target.Profile);
+        if (plan.Settings.Account != callback.Account || plan.Settings.Region != callback.Region
             || plan.Settings.QueueArn != callback.QueueArn
             || target.ProviderJobId is { } previous && previous != callback.JobId)
         {
@@ -99,7 +100,7 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
                 return (true, null);
             }
             var requestKey = Guid.NewGuid();
-            var prefix = FormattableString.Invariant($"submissions/transcode-output/{job.FileId}/{requestKey:N}/");
+            var prefix = OutputPrefix(job.FileId, requestKey);
             plan = new MediaAudioPlanModel(settings, source.Bucket, null, null);
             var number = job.LastAttemptNumber + 1;
             var newId = await repository.StartAudioAsync(job, JsonSerializer.Serialize(plan), plan.Bucket, lease, leaseUntil,
@@ -123,6 +124,11 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             var staged = await StageAsync(work, cancellationToken);
             if (staged is null) return;
             work = staged;
+        }
+        if (!MatchesPlan(work))
+        {
+            await DeferAsync(work, null, "MEDIA_INPUT_RECONCILIATION_REQUIRED", cancellationToken);
+            return;
         }
         var request = new MediaAudioRequestModel(work.Attempt.RequestKey, work.Plan.Bucket,
             work.Plan.Input!.Object.Key, work.Attempt.OutputPrefix + "playback.m4a", work.Plan.Profile!);
@@ -182,10 +188,7 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             return null;
         }
 
-        var target = work.Plan.Settings;
-        var profile = new MediaAudioProfileModel(target.Account, target.Region, target.QueueArn, target.JobRoleArn,
-            SampleRate, input.Channels, input.Channels == 1 ? 96_000 : 128_000);
-        var plan = work.Plan with { Input = input, Profile = profile };
+        var plan = work.Plan with { Input = input, Profile = EffectiveProfile(work.Plan.Settings, input.Channels) };
         await using var transaction = await repository.BeginAsync(cancellationToken);
         var now = clock.GetUtcNow();
         if (!await repository.RetainAudioLeaseAsync(work, now, cancellationToken)) return null;
@@ -197,7 +200,7 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
     private async Task SubmitAsync(MediaAudioWorkModel work, MediaAudioRequestModel request, CancellationToken cancellationToken)
     {
         var startedAt = await AuthorizeSubmissionAsync(work, cancellationToken);
-        if (startedAt is null || !CanSubmit(clock.GetUtcNow(), work.LeaseUntil, startedAt.Value)) return;
+        if (startedAt is null) return;
 
         var firstSubmission = work.Attempt.SubmittedAt is null;
         work = work with { Attempt = work.Attempt with { SubmittedAt = startedAt, State = "unknown" } };
@@ -206,6 +209,13 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
         MediaProviderJobModel job;
         try
         {
+            var now = clock.GetUtcNow();
+            if (!CanSubmit(now, work.LeaseUntil, startedAt.Value))
+            {
+                await DeferAsync(work, null, "MEDIA_SUBMISSION_UNKNOWN", cancellationToken);
+                return;
+            }
+            linked.Token.ThrowIfCancellationRequested();
             job = await provider.CreateAsync(request, linked.Token);
         }
         catch (MediaJobRejectedException error) when (firstSubmission)
@@ -375,14 +385,23 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
 
         var age = now - (work.Attempt.SubmittedAt ?? work.Attempt.StartedAt);
         var intervention = age >= ReconciliationHorizon;
-        var next = now.AddSeconds(intervention || age.TotalHours >= 1 ? 300 : age.TotalMinutes >= 5 ? 60 : 15);
-        if (providerJob is null && work.Attempt.ProviderJobId is null && work.Attempt.SubmittedAt is { } start
+        var next = now + ReconciliationDelay(age);
+        if (providerJob?.State is "complete" or "error" or "canceled" && code is null)
+        {
+            next = now;
+        }
+        else if (providerJob is null && work.Attempt.ProviderJobId is null && work.Attempt.SubmittedAt is { } start
             && CanSubmit(now.AddSeconds(5), now + LeaseDuration, start))
         {
             next = now.AddSeconds(5);
         }
-        var state = providerJob?.State == "submitted" ? "submitted" : providerJob is not null ? "running" : work.Attempt.State;
-        var jobState = code is null && providerJob?.State is "submitted" or "progressing" ? "running" : "reconciling";
+        var state = providerJob?.State switch
+        {
+            "submitted" => "submitted",
+            null => work.Attempt.State,
+            _ => "running"
+        };
+        var jobState = code is null && providerJob?.State is ("submitted" or "progressing") ? "running" : "reconciling";
         var providerId = providerJob?.Id;
         var providerHash = providerId is null ? null : ProviderHash(work.Plan.Settings, providerId);
         var errorCode = intervention ? "MEDIA_RECONCILIATION_INTERVENTION_REQUIRED" : code;
@@ -435,6 +454,19 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
         }
     }
 
+    private static bool MatchesPlan(MediaAudioWorkModel work) =>
+        work.Plan.Input is { Duration: > 0 and <= 300, Channels: 1 or 2 } input
+        && work.Plan.Profile == EffectiveProfile(work.Plan.Settings, input.Channels)
+        && work.Attempt.OutputPrefix == OutputPrefix(work.Job.FileId, work.Attempt.RequestKey)
+        && ValidObject(input.Object, work.Plan.Bucket, InputKey(work.Job.FileId, work.Attempt.RequestKey), MaximumStagingBytes);
+
+    private static MediaAudioProfileModel EffectiveProfile(MediaAudioSettings target, int channels) =>
+        new(target.Account, target.Region, target.QueueArn, target.JobRoleArn, SampleRate, channels,
+            channels == 1 ? 96_000 : 128_000);
+
+    private static TimeSpan ReconciliationDelay(TimeSpan age) => age.TotalHours >= 1 ? TimeSpan.FromMinutes(5)
+        : age.TotalMinutes >= 5 ? TimeSpan.FromMinutes(1) : TimeSpan.FromSeconds(15);
+
     private static bool CanSubmit(DateTimeOffset now, DateTimeOffset leaseUntil, DateTimeOffset startedAt) =>
         now >= startedAt && now + ProviderBudget < leaseUntil && now + ProviderBudget <= startedAt + SubmitWindow;
 
@@ -451,6 +483,9 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
 
     private static string InputKey(long fileId, Guid requestKey) =>
         FormattableString.Invariant($"submissions/transcode-input/{fileId}/{requestKey:N}/input");
+
+    private static string OutputPrefix(long fileId, Guid requestKey) =>
+        FormattableString.Invariant($"submissions/transcode-output/{fileId}/{requestKey:N}/");
 
     private static byte[] ProviderHash(MediaAudioSettings scope, string jobId) => Hash($"{scope.Account}:{scope.Region}:{jobId}");
 
