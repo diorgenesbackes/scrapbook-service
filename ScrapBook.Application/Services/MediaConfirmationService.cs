@@ -7,6 +7,8 @@ namespace ScrapBook.Application.Services;
 
 internal static class MediaConfirmationService
 {
+    internal const string Consumer = "media-preparation";
+    internal const string Source = "internal";
     internal static readonly PhotoPreparationProfileModel PhotoProfile = new(2048, 400, 85);
     internal static string[] PhotoKinds => ["image", "thumbnail"];
 
@@ -23,6 +25,9 @@ internal static class MediaConfirmationService
             && original.ObjectKey.StartsWith("submissions/original/", StringComparison.Ordinal)
             && CryptographicOperations.FixedTimeEquals(original.Sha256, original.OriginalSha256);
     }
+
+    internal static bool MatchesDelivery(ProcessedMessageEntity? delivery, byte[] hash) =>
+        delivery is { State: "completed" } && CryptographicOperations.FixedTimeEquals(delivery.PayloadHash, hash);
 
     internal static bool IsVersioned(string versionId) => !string.IsNullOrWhiteSpace(versionId) && versionId != "null";
 
