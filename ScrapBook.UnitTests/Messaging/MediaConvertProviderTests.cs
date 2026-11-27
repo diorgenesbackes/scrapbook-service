@@ -132,6 +132,30 @@ public sealed class MediaConvertProviderTests
         Assert.Equal(channels == 1 ? AacCodingMode.CODING_MODE_1_0 : AacCodingMode.CODING_MODE_2_0, aac.CodingMode);
     }
 
+    [Fact]
+    public async Task InheritsSmallSourceDimensionsWithoutAskingTheProviderToScaleAsync()
+    {
+        using var client = new MediaConvertClientStub
+        {
+            Create = (_, _) => Task.FromResult(new CreateJobResponse { Job = Job(JobStatus.SUBMITTED) })
+        };
+        var request = Request() with
+        {
+            OutputKey = Path.ChangeExtension(OutputKey, ".mp4"),
+            Video = new(24, 24, 30, 1, 0, UseSourceDimensions: true)
+        };
+
+        await new MediaConvertProvider(client).CreateAsync(request, CancellationToken.None);
+
+        var create = Assert.Single(client.Creates);
+        var group = Assert.Single(create.Settings.OutputGroups);
+        var video = Assert.Single(group.Outputs).VideoDescription;
+        Assert.Null(video.Width);
+        Assert.Null(video.Height);
+        Assert.Null(video.ScalingBehavior);
+        Assert.Equal(VideoCodec.H_264, video.CodecSettings.Codec);
+    }
+
     [Theory]
     [InlineData(641, 480, 30, 1, 0, 2, "mp4")]
     [InlineData(640, 0, 30, 1, 0, 2, "mp4")]

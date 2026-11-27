@@ -55,6 +55,21 @@ public sealed class S3MediaVideoStorageTests
     }
 
     [FfmpegTheory]
+    [InlineData("video-webm-opus-300s.webm")]
+    public async Task StagesAConfirmedFiveMinuteVideoAfterApplyingOpusPreskipAsync(string fixture)
+    {
+        var bytes = await ReadFixtureAsync(fixture, CancellationToken.None);
+        using var client = new MediaAudioS3ClientStub(SourceKey, bytes) { SourceMediaType = "video/webm" };
+        var storage = new S3MediaVideoStorage(client, Decoder());
+
+        var input = await storage.StageAsync(Source(bytes), InputKey, CancellationToken.None);
+
+        Assert.Equal(300m, input.Properties.Duration);
+        Assert.Equal(("vp9", "opus"), (input.Properties.VideoCodec, input.Properties.AudioCodec));
+        Assert.Single(client.Puts);
+    }
+
+    [FfmpegTheory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ConditionalStageRetryReusesOnlyAnInputBoundToTheSameSourceAsync(bool foreignSource)
