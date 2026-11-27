@@ -22,7 +22,7 @@ public sealed record MediaAudioProcessingOptions(bool Enabled, MediaAudioSetting
         var queueArn = section["QueueArn"];
         if (queueArn?.Split(':') is not ["arn", ("aws" or "aws-cn" or "aws-us-gov") and var partition, "mediaconvert",
             var queueRegion, { Length: 12 } and var account, var queueResource] || queueRegion != region
-            || !account.All(char.IsAsciiDigit) || !queueResource.StartsWith("queues/", StringComparison.Ordinal)
+            || partition != PartitionForRegion(region) || !account.All(char.IsAsciiDigit) || !queueResource.StartsWith("queues/", StringComparison.Ordinal)
             || !SnsSqsOptions.IsStandardName(queueResource["queues/".Length..]))
         {
             throw Invalid("QueueArn");
@@ -51,6 +51,13 @@ public sealed record MediaAudioProcessingOptions(bool Enabled, MediaAudioSetting
         return new(true, settings, queue.AbsoluteUri,
             SnsSqsOptions.ReadEndpoint(section, development, SectionName, "MediaConvertServiceUrl"),
             SnsSqsOptions.ReadEndpoint(section, development, SectionName, "SqsServiceUrl"));
+    }
+
+    private static string PartitionForRegion(string region)
+    {
+        if (region.StartsWith("cn-", StringComparison.Ordinal)) return "aws-cn";
+        if (region.StartsWith("us-gov-", StringComparison.Ordinal)) return "aws-us-gov";
+        return "aws";
     }
 
     private static bool ValidRolePath(string value) =>
