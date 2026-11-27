@@ -61,6 +61,78 @@ public sealed class MediaConvertProviderTests
     }
 
     [Theory]
+    [InlineData(0, 0, 0, 1920, 1080, 30, 1, "DEGREE_0")]
+    [InlineData(1, 96000, 90, 720, 1280, 24000, 1001, "DEGREES_270")]
+    [InlineData(2, 128000, 270, 720, 1280, 30000, 1001, "DEGREES_90")]
+    [InlineData(0, 0, 180, 1080, 1080, 25, 1, "DEGREES_180")]
+    public async Task ConfiguresPrivateProgressiveVideoWithinTheEffectiveProfileAsync(int channels, int bitrate, int rotation,
+        int width, int height, int numerator, int denominator, string expectedRotation)
+    {
+        using var client = new MediaConvertClientStub
+        {
+            Create = (_, _) => Task.FromResult(new CreateJobResponse { Job = Job(JobStatus.SUBMITTED) })
+        };
+        var provider = new MediaConvertProvider(client);
+        var profile = Profile with { Channels = channels, Bitrate = bitrate, SampleRate = channels == 0 ? 0 : 48000 };
+        var outputKey = Path.ChangeExtension(OutputKey, ".mp4");
+        var request = Request() with
+        {
+            Profile = profile,
+            OutputKey = outputKey,
+            Video = new(width, height, numerator, denominator, rotation)
+        };
+
+        var job = await provider.CreateAsync(request, CancellationToken.None);
+
+        Assert.Equal(RequestKey, job.RequestKey);
+        var create = Assert.Single(client.Creates);
+        Assert.Equal(RequestKey.ToString("N"), create.ClientRequestToken);
+        Assert.Equal(KeyValuePair.Create("requestKey", create.ClientRequestToken), Assert.Single(create.UserMetadata));
+        var input = Assert.Single(create.Settings.Inputs);
+        Assert.Equal($"s3://{Bucket}/{InputKey}", input.FileInput);
+        Assert.Equal(expectedRotation, input.VideoSelector.Rotate.Value);
+        var group = Assert.Single(create.Settings.OutputGroups);
+        Assert.Equal($"s3://{Bucket}/{outputKey[..^4]}", group.OutputGroupSettings.FileGroupSettings.Destination);
+        var output = Assert.Single(group.Outputs);
+        Assert.Equal("mp4", output.Extension);
+        Assert.Equal(ContainerType.MP4, output.ContainerSettings.Container);
+        Assert.Equal(Mp4MoovPlacement.PROGRESSIVE_DOWNLOAD, output.ContainerSettings.Mp4Settings.MoovPlacement);
+        var video = output.VideoDescription;
+        Assert.Equal((width, height), (video.Width, video.Height));
+        Assert.Equal(ScalingBehavior.FIT_NO_UPSCALE, video.ScalingBehavior);
+        Assert.Equal(VideoCodec.H_264, video.CodecSettings.Codec);
+        var h264 = video.CodecSettings.H264Settings;
+        Assert.Equal(H264RateControlMode.QVBR, h264.RateControlMode);
+        Assert.Equal(7, h264.QvbrSettings.QvbrQualityLevel);
+        Assert.Equal(5_000_000, h264.MaxBitrate);
+        Assert.Equal(H264QualityTuningLevel.SINGLE_PASS_HQ, h264.QualityTuningLevel);
+        Assert.Equal(H264FramerateControl.SPECIFIED, h264.FramerateControl);
+        Assert.Equal(H264FramerateConversionAlgorithm.DUPLICATE_DROP, h264.FramerateConversionAlgorithm);
+        Assert.Equal((numerator, denominator), (h264.FramerateNumerator, h264.FramerateDenominator));
+        Assert.Equal(H264ParControl.SPECIFIED, h264.ParControl);
+        Assert.Equal((1, 1), (h264.ParNumerator, h264.ParDenominator));
+        if (channels == 0)
+        {
+            Assert.Null(input.AudioSelectors);
+            Assert.Null(output.AudioDescriptions);
+            return;
+        }
+
+        var selector = Assert.Single(input.AudioSelectors);
+        Assert.Equal(AudioSelectorType.TRACK, selector.Value.SelectorType);
+        Assert.Equal(1, Assert.Single(selector.Value.Tracks));
+        var audio = Assert.Single(output.AudioDescriptions);
+        Assert.Equal(selector.Key, audio.AudioSourceName);
+        Assert.Equal(AudioCodec.AAC, audio.CodecSettings.Codec);
+        var aac = audio.CodecSettings.AacSettings;
+        Assert.Equal(AacCodecProfile.LC, aac.CodecProfile);
+        Assert.Equal(AacSpecification.MPEG4, aac.Specification);
+        Assert.Equal(48000, aac.SampleRate);
+        Assert.Equal(bitrate, aac.Bitrate);
+        Assert.Equal(channels == 1 ? AacCodingMode.CODING_MODE_1_0 : AacCodingMode.CODING_MODE_2_0, aac.CodingMode);
+    }
+
+    [Theory]
     [InlineData("bad-request", false)]
     [InlineData("forbidden", false)]
     [InlineData("throttled", true)]
@@ -133,9 +205,12 @@ public sealed class MediaConvertProviderTests
             new MediaConvertProvider(client).CreateAsync(Request(), CancellationToken.None));
     }
 
-    [Fact]
-    public async Task ReadsTheExpectedM4aLocationFromTheCompletedJobAsync()
+    [Theory]
+    [InlineData("m4a")]
+    [InlineData("mp4")]
+    public async Task ReadsTheExpectedPlaybackLocationFromTheCompletedJobAsync(string extension)
     {
+        var outputKey = Path.ChangeExtension(OutputKey, extension);
         var job = Job(JobStatus.COMPLETE);
         job.ClientRequestToken = RequestKey.ToString("N");
         job.Settings = new()
@@ -145,8 +220,8 @@ public sealed class MediaConvertProviderTests
             [
                 new()
                 {
-                    OutputGroupSettings = new() { FileGroupSettings = new() { Destination = $"s3://{Bucket}/{OutputKey[..^4]}" } },
-                    Outputs = [new() { Extension = "m4a" }]
+                    OutputGroupSettings = new() { FileGroupSettings = new() { Destination = $"s3://{Bucket}/{outputKey[..^4]}" } },
+                    Outputs = [new() { Extension = extension }]
                 }
             ]
         };
@@ -154,12 +229,12 @@ public sealed class MediaConvertProviderTests
 
         var result = await new MediaConvertProvider(client).GetAsync(ProviderJobId, CancellationToken.None);
 
-        Assert.Equal(ProviderJob(RequestKey, "complete", OutputKey) with
+        Assert.Equal(ProviderJob(RequestKey, "complete", outputKey) with
         {
             JobRoleArn = Settings.JobRoleArn,
             ClientRequestToken = RequestKey.ToString("N"),
             InputUri = $"s3://{Bucket}/{InputKey}",
-            OutputDestination = $"s3://{Bucket}/{OutputKey[..^4]}"
+            OutputDestination = $"s3://{Bucket}/{outputKey[..^4]}"
         }, result);
         Assert.Equal(ProviderJobId, Assert.Single(client.Gets).Id);
     }
