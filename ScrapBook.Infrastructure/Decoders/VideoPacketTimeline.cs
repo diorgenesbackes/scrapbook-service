@@ -13,6 +13,8 @@ internal sealed class VideoPacketTimeline(int videoIndex, MediaRationalModel vid
     private decimal? audioFirst;
     private decimal? audioLast;
 
+    public int VideoPacketCount => frames.Count;
+
     public async Task<VideoPacketTimeline> ReadAsync(StreamReader reader, CancellationToken cancellationToken)
     {
         var count = 0;

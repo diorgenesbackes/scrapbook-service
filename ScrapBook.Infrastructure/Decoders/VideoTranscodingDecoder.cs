@@ -86,7 +86,7 @@ public sealed class VideoTranscodingDecoder(string executablePath)
         await MediaDecoderProcess.RunAsync(ffmpeg, inputPath, arguments,
             (reader, token) => MediaDecoderProcess.ReadBoundedAsync(reader, 1024, token), MaximumInputBytes, cancellationToken);
 
-        if (new FileInfo(outputPath).Length is <= 0 or >= MaximumInputBytes) throw new PhotoContentInvalidException();
+        if (new FileInfo(outputPath).Length is <= 0 or > MaximumInputBytes) throw new PhotoContentInvalidException();
         var staged = await probe.DecodeAsync(outputPath, false, false, cancellationToken);
         RequireEquivalentInput(staged, original, format);
 
@@ -106,6 +106,7 @@ public sealed class VideoTranscodingDecoder(string executablePath)
         var source = original.Properties;
         var output = staged.Properties;
         if (staged.StreamCount != ExpectedStreamCount(original) || staged.VideoIndex != 0
+            || staged.VideoPacketCount != original.VideoPacketCount
             || (original.AudioIndex is null ? staged.AudioIndex is not null : staged.AudioIndex != 1)
             || output.Container != format || output.VideoCodec != source.VideoCodec || output.HasLocationMetadata
             || !SupportsAudioCopy(format, output.AudioCodec) || output.Rotation != source.Rotation
