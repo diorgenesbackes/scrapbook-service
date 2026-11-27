@@ -14,17 +14,22 @@ public sealed class ProcessPhotoSubmissionDecoder : IPhotoSubmissionDecoder
     public const string Argument = "--decode-private-photo";
     public const int InvalidContentExitCode = 2;
     public const int BudgetExceededExitCode = 3;
+    public const int InvalidOutputExitCode = 4;
     private const int MaximumOutputCharacters = 1024;
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);
 
-    public async Task<PhotoImageModel> DecodeAsync(byte[] bytes, CancellationToken cancellationToken)
+    public Task<PhotoImageModel> DecodeAsync(byte[] bytes, CancellationToken cancellationToken) =>
+        ExecuteAsync(bytes, [Argument], ReadOutputAsync, cancellationToken);
+
+    internal static async Task<T> ExecuteAsync<T>(byte[] bytes, string[] arguments,
+        Func<Process, CancellationToken, Task<T?>> readOutput, CancellationToken cancellationToken) where T : class
     {
         cancellationToken.ThrowIfCancellationRequested();
         DirectoryInfo? scratch = null;
         try
         {
             scratch = Directory.CreateTempSubdirectory("scrapbook-photo-");
-            return await RunAsync(bytes, scratch.FullName, cancellationToken);
+            return await RunAsync(bytes, arguments, readOutput, scratch.FullName, cancellationToken);
         }
         catch (IOException)
         {
@@ -36,11 +41,12 @@ public sealed class ProcessPhotoSubmissionDecoder : IPhotoSubmissionDecoder
         }
     }
 
-    private static async Task<PhotoImageModel> RunAsync(byte[] bytes, string scratchPath, CancellationToken cancellationToken)
+    private static async Task<T> RunAsync<T>(byte[] bytes, string[] arguments, Func<Process, CancellationToken, Task<T?>> readOutput,
+        string scratchPath, CancellationToken cancellationToken) where T : class
     {
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         budget.CancelAfter(Timeout);
-        using var process = new Process { StartInfo = StartInfo(bytes.Length, scratchPath) };
+        using var process = new Process { StartInfo = StartInfo(bytes.Length, arguments, scratchPath) };
         try
         {
             if (!process.Start()) throw new PhotoDecoderUnavailableException();
@@ -50,7 +56,7 @@ public sealed class ProcessPhotoSubmissionDecoder : IPhotoSubmissionDecoder
             throw new PhotoDecoderUnavailableException();
         }
 
-        var output = ReadOutputAsync(process.StandardOutput, budget.Token);
+        var output = readOutput(process, budget.Token);
         var drain = process.StandardError.BaseStream.CopyToAsync(Stream.Null, budget.Token);
         try
         {
@@ -60,9 +66,10 @@ public sealed class ProcessPhotoSubmissionDecoder : IPhotoSubmissionDecoder
             await Task.WhenAll(process.WaitForExitAsync(budget.Token), drain);
             return process.ExitCode switch
             {
-                0 => JsonSerializer.Deserialize<PhotoImageModel>(result) ?? throw new PhotoDecoderUnavailableException(),
+                0 => result ?? throw new PhotoDecoderUnavailableException(),
                 InvalidContentExitCode => throw new PhotoContentInvalidException(),
                 BudgetExceededExitCode => throw new PhotoDecoderBudgetException(),
+                InvalidOutputExitCode => throw new MediaOutputInvalidException(),
                 _ => throw new PhotoDecoderUnavailableException()
             };
         }
@@ -90,11 +97,12 @@ public sealed class ProcessPhotoSubmissionDecoder : IPhotoSubmissionDecoder
         }
     }
 
-    private static async Task<string> ReadOutputAsync(StreamReader output, CancellationToken cancellationToken)
+    private static async Task<PhotoImageModel?> ReadOutputAsync(Process process, CancellationToken cancellationToken)
     {
         var buffer = new char[MaximumOutputCharacters + 1];
-        var length = await output.ReadBlockAsync(buffer.AsMemory(), cancellationToken);
-        return length <= MaximumOutputCharacters ? new string(buffer, 0, length) : throw new PhotoDecoderUnavailableException();
+        var length = await process.StandardOutput.ReadBlockAsync(buffer.AsMemory(), cancellationToken);
+        if (length > MaximumOutputCharacters) throw new PhotoDecoderUnavailableException();
+        return length == 0 ? null : JsonSerializer.Deserialize<PhotoImageModel>(buffer.AsSpan(0, length));
     }
 
     private static void DeleteScratch(DirectoryInfo? scratch)
@@ -108,7 +116,7 @@ public sealed class ProcessPhotoSubmissionDecoder : IPhotoSubmissionDecoder
         }
     }
 
-    private static ProcessStartInfo StartInfo(int bytes, string scratchPath)
+    private static ProcessStartInfo StartInfo(int bytes, string[] arguments, string scratchPath)
     {
         var executable = Environment.ProcessPath ?? throw new PhotoDecoderUnavailableException();
         var start = new ProcessStartInfo(executable)
@@ -123,8 +131,12 @@ public sealed class ProcessPhotoSubmissionDecoder : IPhotoSubmissionDecoder
         {
             start.ArgumentList.Add(Assembly.GetEntryAssembly()?.Location ?? throw new PhotoDecoderUnavailableException());
         }
-        start.ArgumentList.Add(Argument);
+        start.ArgumentList.Add(arguments[0]);
         start.ArgumentList.Add(bytes.ToString(CultureInfo.InvariantCulture));
+        foreach (var argument in arguments.Skip(1))
+        {
+            start.ArgumentList.Add(argument);
+        }
         foreach (var key in start.Environment.Keys.Except(new[] { "DOTNET_ROOT", "DOTNET_ROOT_X64",
             "DOTNET_ROOT_ARM64", "SystemRoot" }).ToArray())
         {

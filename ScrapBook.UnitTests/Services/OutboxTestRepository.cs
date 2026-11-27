@@ -8,6 +8,7 @@ internal sealed class OutboxTestRepository : IOutboxRepository
 {
     public OutboxMessageEntity? Origin { get; set; }
     public Guid? CurrentLease { get; set; }
+    public DateTimeOffset? CurrentLeaseExpiresAt { get; set; }
     public Action<StructuralLockOutboxEntity, CancellationToken>? BeforeResult { get; set; }
     public EventWriteTestTransaction Transaction { get; private set; } = new();
     public List<(string Type, int Limit, Guid Lease, DateTimeOffset Now, DateTimeOffset Until, CancellationToken Token)> Claims
@@ -70,13 +71,16 @@ internal sealed class OutboxTestRepository : IOutboxRepository
     public Task<bool> MarkPublishedAsync(Guid messageId, Guid leaseToken, DateTimeOffset now, CancellationToken cancellationToken)
     {
         Published.Add((messageId, leaseToken, now, cancellationToken));
-        return Task.FromResult(CurrentLease is null || leaseToken == CurrentLease);
+        return Task.FromResult(RetainsLease(leaseToken, now));
     }
 
     public Task<bool> MarkFailedAsync(Guid messageId, Guid leaseToken, bool terminal, string errorCode, DateTimeOffset now,
         DateTimeOffset availableAt, CancellationToken cancellationToken)
     {
         Failures.Add((messageId, leaseToken, terminal, errorCode, now, availableAt, cancellationToken));
-        return Task.FromResult(CurrentLease is null || leaseToken == CurrentLease);
+        return Task.FromResult(RetainsLease(leaseToken, now));
     }
+
+    private bool RetainsLease(Guid leaseToken, DateTimeOffset now) => (CurrentLease is null || leaseToken == CurrentLease)
+        && (CurrentLeaseExpiresAt is null || now < CurrentLeaseExpiresAt);
 }
