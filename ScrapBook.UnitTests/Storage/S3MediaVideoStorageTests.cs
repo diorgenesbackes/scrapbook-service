@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text.Json;
 using ScrapBook.Domain.Entities;
 using ScrapBook.Domain.Exceptions;
 using ScrapBook.Infrastructure.Decoders;
@@ -52,6 +54,55 @@ public sealed class S3MediaVideoStorageTests
             var framesPerSecond = (decimal)result.Properties.FrameRateNumerator / result.Properties.FrameRateDenominator;
             Assert.InRange(framesPerSecond, 14.9m, 15m);
         }
+    }
+
+    [FfmpegTheory]
+    [InlineData("video-primary-2s-secondary-4s.mp4")]
+    public async Task StagesThePrimaryAudioWithoutInheritingTheLongerSecondaryTrackAsync(string fixture)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var bytes = await ReadFixtureAsync(fixture, deadline.Token);
+        using var client = new MediaAudioS3ClientStub(SourceKey, bytes) { SourceMediaType = "video/mp4" };
+        var storage = new S3MediaVideoStorage(client, Decoder());
+
+        var input = await storage.StageAsync(Source(bytes), InputKey, deadline.Token);
+
+        Assert.Equal(2m, input.Properties.Duration);
+        Assert.Equal(("aac", 1), (input.Properties.AudioCodec, input.Properties.AudioChannels));
+        using var probe = await ProbeStagedStreamsAsync(Assert.Single(client.Puts).Bytes, deadline.Token);
+        var streams = probe.RootElement.GetProperty("streams").EnumerateArray().ToArray();
+        Assert.Equal(new[] { "video", "audio" }, streams.Select(stream => stream.GetProperty("codec_type").GetString()));
+        Assert.Equal("2.000000", streams[0].GetProperty("duration").GetString());
+        Assert.Equal("2.000000", streams[1].GetProperty("duration").GetString());
+        Assert.Equal(1, streams[1].GetProperty("channels").GetInt32());
+    }
+
+    [FfmpegTheory]
+    [InlineData("video-rotated-444.mov")]
+    public async Task StagesRotatedH264InProgressiveYuv420WithoutChangingTheSourceGeometryOrCadenceAsync(string fixture)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var bytes = await ReadFixtureAsync(fixture, deadline.Token);
+        using var client = new MediaAudioS3ClientStub(SourceKey, bytes) { SourceMediaType = "video/quicktime" };
+        var storage = new S3MediaVideoStorage(client, Decoder());
+
+        var input = await storage.StageAsync(Source(bytes), InputKey, deadline.Token);
+
+        var properties = input.Properties;
+        Assert.Equal(("h264", 96, 64, 90, 24, 1),
+            (properties.VideoCodec, properties.Width, properties.Height, properties.Rotation,
+                properties.FrameRateNumerator, properties.FrameRateDenominator));
+        Assert.False(properties.VariableFrameRate);
+        using var probe = await ProbeStagedStreamsAsync(Assert.Single(client.Puts).Bytes, deadline.Token);
+        var video = Assert.Single(probe.RootElement.GetProperty("streams").EnumerateArray());
+        Assert.Equal("h264", video.GetProperty("codec_name").GetString());
+        Assert.Equal("yuv420p", video.GetProperty("pix_fmt").GetString());
+        Assert.Equal("progressive", video.GetProperty("field_order").GetString());
+        Assert.Equal((96, 64), (video.GetProperty("width").GetInt32(), video.GetProperty("height").GetInt32()));
+        Assert.Equal("24/1", video.GetProperty("avg_frame_rate").GetString());
+        var rotation = Assert.Single(video.GetProperty("side_data_list").EnumerateArray(),
+            item => item.TryGetProperty("rotation", out _));
+        Assert.Equal(90, rotation.GetProperty("rotation").GetInt32());
     }
 
     [FfmpegTheory]
@@ -196,6 +247,46 @@ public sealed class S3MediaVideoStorageTests
             Assert.Equal(headVersion, Assert.Single(client.Reads).Request.VersionId);
         else
             Assert.Empty(client.Reads);
+    }
+
+    private static async Task<JsonDocument> ProbeStagedStreamsAsync(byte[] bytes, CancellationToken cancellationToken)
+    {
+        var scratch = Directory.CreateTempSubdirectory("scrapbook-staged-video-test-");
+        try
+        {
+            var path = Path.Combine(scratch.FullName, "staged-video");
+            await File.WriteAllBytesAsync(path, bytes, cancellationToken);
+            var start = new ProcessStartInfo(FfmpegTheoryAttribute.FfprobePath!)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            string[] arguments = ["-v", "error", "-show_entries",
+                "stream=codec_type,codec_name,channels,duration,pix_fmt,field_order,width,height,avg_frame_rate:stream_side_data=rotation",
+                "-of", "json", path];
+            foreach (var argument in arguments)
+                start.ArgumentList.Add(argument);
+
+            using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not start FFprobe.");
+            try
+            {
+                var output = process.StandardOutput.ReadToEndAsync(cancellationToken);
+                var errors = process.StandardError.ReadToEndAsync(cancellationToken);
+                await process.WaitForExitAsync(cancellationToken);
+                Assert.True(process.ExitCode == 0, await errors);
+                return JsonDocument.Parse(await output);
+            }
+            finally
+            {
+                if (!process.HasExited)
+                    process.Kill();
+            }
+        }
+        finally
+        {
+            scratch.Delete(recursive: true);
+        }
     }
 
     private static VideoTranscodingDecoder Decoder() => new(FfmpegTheoryAttribute.FfprobePath!);
