@@ -18,23 +18,33 @@ public sealed class FfprobeAudioDecoder(string executablePath)
 
     internal async Task<AudioMetadataModel> DecodeAsync(string path, byte[] sha256, CancellationToken cancellationToken)
     {
+        var audio = await ProbeAsync(path, false, cancellationToken);
+        return new AudioMetadataModel(audio.MediaType, audio.Container, audio.Primary.Codec, audio.Duration, sha256);
+    }
+
+    internal async Task<AudioDecodingModel> ProbeAsync(string path, bool playback, CancellationToken cancellationToken)
+    {
         if (!Path.IsPathFullyQualified(executablePath)) throw new PhotoDecoderUnavailableException();
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         budget.CancelAfter(DecodeTimeout);
         try
         {
-            var webm = await VideoContainerReader.IsWebmAsync(path, budget.Token);
-            var metadata = await ReadMetadataAsync(path, webm, budget.Token);
+            var webm = !playback && await VideoContainerReader.IsWebmAsync(path, budget.Token);
+            var metadata = await ReadMetadataAsync(path, webm, playback, budget.Token);
             using var json = JsonDocument.Parse(metadata, new JsonDocumentOptions { MaxDepth = 10 });
             var (mediaType, container) = Container(json.RootElement.GetProperty("format"), webm);
-            var tracks = AudioTracks(json.RootElement.GetProperty("streams"), container);
+            var streams = json.RootElement.GetProperty("streams");
+            var tracks = AudioTracks(streams, container);
+            var (primaryIndex, primary) = tracks.FirstOrDefault(track => track.Value.IsDefault);
+            if (primary is null) (primaryIndex, primary) = tracks.First();
+            if (playback && (container != "m4a" || streams.GetArrayLength() != 1 || primary.Codec != "aac"
+                || primary.Profile != "LC" || primary.Channels <= 0)) throw new PhotoContentInvalidException();
             if (container == "ogg") await OggPageReader.RequireCompleteAsync(path, budget.Token);
             if (!await ReadFramesAsync(path, container, tracks, budget.Token))
                 throw new PhotoContentInvalidException();
             await VerifyDecodeAsync(path, container, budget.Token);
             var duration = PresentationDuration(tracks.Values, container);
-            var primary = tracks.Values.FirstOrDefault(track => track.IsDefault) ?? tracks.Values.First();
-            return new AudioMetadataModel(mediaType, container, primary.Codec, duration, sha256);
+            return new AudioDecodingModel(mediaType, container, duration, streams.GetArrayLength(), primaryIndex, primary);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -65,13 +75,13 @@ public sealed class FfprobeAudioDecoder(string executablePath)
         return first is { } beginning && last is { } ending ? Math.Max(duration, ending - beginning) : duration;
     }
 
-    private Task<string> ReadMetadataAsync(string path, bool webm, CancellationToken cancellationToken)
+    private Task<string> ReadMetadataAsync(string path, bool webm, bool playback, CancellationToken cancellationToken)
     {
-        var formats = webm ? "matroska,webm" : "mp3,mov,wav,ogg";
-        var input = AudioDecoderProcess.InputOptions(formats, false);
+        var formats = playback ? "mov" : webm ? "matroska,webm" : "mp3,mov,wav,ogg";
+        var input = AudioDecoderProcess.InputOptions(formats, playback);
         string[] options = ["-count_packets", "-show_streams", "-show_format", "-show_entries",
             "format=format_name:format_tags=major_brand,compatible_brands:stream=index,codec_type,codec_name,"
-            + "sample_rate,time_base,nb_read_packets:stream_tags=:stream_disposition=default,attached_pic",
+            + "sample_rate,channels,profile,time_base,nb_read_packets:stream_tags=:stream_disposition=default,attached_pic",
             "-output_format", "json", "-i", path];
         return AudioDecoderProcess.RunAsync(executablePath, path, [.. input, .. options],
             (reader, token) => AudioDecoderProcess.ReadBoundedAsync(reader, MaximumMetadataOutput, token), cancellationToken);
@@ -101,7 +111,7 @@ public sealed class FfprobeAudioDecoder(string executablePath)
             (reader, token) => AudioDecoderProcess.ReadBoundedAsync(reader, 1024, token), cancellationToken);
     }
 
-    private static string FormatWhitelist(string container) => container switch
+    internal static string FormatWhitelist(string container) => container switch
     {
         "m4a" => "mov",
         "webm" => "matroska,webm",
@@ -163,7 +173,7 @@ public sealed class FfprobeAudioDecoder(string executablePath)
             if (separator <= 0 || !TryPositiveInteger(timeBase[..separator], out var numerator)
                 || !TryPositiveInteger(timeBase[(separator + 1)..], out var denominator)
                 || !tracks.TryAdd(index, new AudioTrackTimingModel(codec!, Number(disposition, "default") == 1,
-                    sampleRate, numerator, denominator)))
+                    sampleRate, Number(stream, "channels") ?? 0, Text(stream, "profile"), numerator, denominator)))
                 throw new PhotoContentInvalidException();
         }
 

@@ -2,6 +2,15 @@
   "version": 1,
   "dependencies": {
     "net10.0": {
+      "AWSSDK.MediaConvert": {
+        "type": "Direct",
+        "requested": "[4.1.0, )",
+        "resolved": "4.1.0",
+        "contentHash": "9j3hVvztFgUqphvpanAZlRZu6fEoCH3ab+RElSSodho+D7/3bh2XZCdil0kkaedfIVXZRqucKB8ITVymz6dXYg==",
+        "dependencies": {
+          "AWSSDK.Core": "[4.1.0, 5.0.0)"
+        }
+      },
       "AWSSDK.S3": {
         "type": "Direct",
         "requested": "[4.1.0, )",
