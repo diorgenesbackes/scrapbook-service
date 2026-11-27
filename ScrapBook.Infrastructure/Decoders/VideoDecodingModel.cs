@@ -3,4 +3,4 @@ using ScrapBook.Domain.Models;
 namespace ScrapBook.Infrastructure.Decoders;
 
 internal sealed record VideoDecodingModel(MediaVideoPropertiesModel Properties, string MediaType, int VideoIndex,
-    int? AudioIndex, int StreamCount, int VideoPacketCount);
+    int? AudioIndex, int StreamCount, int VideoPacketCount, string? PixelFormat, string? FieldOrder);

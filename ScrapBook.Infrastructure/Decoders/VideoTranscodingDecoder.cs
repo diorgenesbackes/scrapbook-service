@@ -20,13 +20,14 @@ public sealed class VideoTranscodingDecoder(string executablePath)
         {
             var original = await probe.DecodeAsync(path, true, false, budget.Token);
             var video = original.Properties;
-            var format = SelectStagingFormat(video);
+            var normalizeVideo = video.Rotation != 0 && !SupportsRotation(original);
+            var format = normalizeVideo ? (video.Container == "mov" ? "mov" : "mp4") : SelectStagingFormat(video);
             if (format == "webm" && video.Container == "webm" && SupportsAudioCopy("webm", video.AudioCodec)
                 && original.StreamCount == ExpectedStreamCount(original) && !video.HasLocationMetadata)
                 return new VideoTranscodingInputModel(path, original.MediaType, video);
 
             var outputPath = Path.Combine(Path.GetDirectoryName(path)!, "normalized");
-            return await RewriteAsync(path, outputPath, original, format, budget.Token);
+            return await RewriteAsync(path, outputPath, original, format, normalizeVideo, budget.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -49,15 +50,16 @@ public sealed class VideoTranscodingDecoder(string executablePath)
     }
 
     private async Task<VideoTranscodingInputModel> RewriteAsync(string inputPath, string outputPath, VideoDecodingModel original,
-        string format, CancellationToken cancellationToken)
+        string format, bool normalizeVideo, CancellationToken cancellationToken)
     {
         var video = original.Properties;
+        var videoOptions = normalizeVideo ? NormalizedVideoOptions(original) : ["-c:v", "copy"];
         if (SupportsAudioCopy(format, video.AudioCodec))
         {
             try
             {
-                return await RewriteAndInspectAsync(inputPath, outputPath, original, format, ["-c:a", "copy"],
-                    cancellationToken);
+                return await RewriteAndInspectAsync(inputPath, outputPath, original, format, videoOptions, ["-c:a", "copy"],
+                    normalizeVideo, cancellationToken);
             }
             catch (PhotoContentInvalidException) when (original.AudioIndex is not null)
             {
@@ -67,11 +69,13 @@ public sealed class VideoTranscodingDecoder(string executablePath)
         var channels = Math.Min(video.AudioChannels, 2).ToString(CultureInfo.InvariantCulture);
         var codec = NormalizedAudioOptions(format, new FileInfo(inputPath).Length);
         string[] audio = [.. codec, "-ar", "48000", "-ac", channels];
-        return await RewriteAndInspectAsync(inputPath, outputPath, original, format, audio, cancellationToken);
+        return await RewriteAndInspectAsync(inputPath, outputPath, original, format, videoOptions, audio, normalizeVideo,
+            cancellationToken);
     }
 
     private async Task<VideoTranscodingInputModel> RewriteAndInspectAsync(string inputPath, string outputPath,
-        VideoDecodingModel original, string format, string[] audio, CancellationToken cancellationToken)
+        VideoDecodingModel original, string format, string[] videoOptions, string[] audio, bool normalizeVideo,
+        CancellationToken cancellationToken)
     {
         var ffmpeg = Path.Combine(Path.GetDirectoryName(executablePath)!, "ffmpeg");
         var input = FfprobeVideoProfileDecoder.InputOptions(original.Properties.Container == "webm");
@@ -81,14 +85,14 @@ public sealed class VideoTranscodingDecoder(string executablePath)
         string[] arguments = ["-hide_banner", "-nostdin", "-nostats", "-y", "-xerror", "-max_error_rate", "0",
             "-filter_threads", "1", .. input, "-noautorotate", "-i", inputPath, "-map", videoStream, .. audioStream,
             "-map_metadata", "-1", "-map_metadata:s:v", "-1", "-map_metadata:s:a", "-1", "-map_chapters", "-1",
-            "-threads", "1", "-fflags", "+bitexact", "-c:v", "copy", .. audio, .. movOptions,
+            "-threads", "1", "-fflags", "+bitexact", .. videoOptions, .. audio, .. movOptions,
             "-fs", MaximumInputBytes.ToString(CultureInfo.InvariantCulture), "-f", format, outputPath];
         await MediaDecoderProcess.RunAsync(ffmpeg, inputPath, arguments,
             (reader, token) => MediaDecoderProcess.ReadBoundedAsync(reader, 1024, token), MaximumInputBytes, cancellationToken);
 
         if (new FileInfo(outputPath).Length is <= 0 or > MaximumInputBytes) throw new PhotoContentInvalidException();
         var staged = await probe.DecodeAsync(outputPath, false, false, cancellationToken);
-        RequireEquivalentInput(staged, original, format);
+        RequireEquivalentInput(staged, original, format, normalizeVideo);
 
         var source = original.Properties;
         var properties = staged.Properties with
@@ -101,14 +105,17 @@ public sealed class VideoTranscodingDecoder(string executablePath)
         return new VideoTranscodingInputModel(outputPath, staged.MediaType, properties);
     }
 
-    private static void RequireEquivalentInput(VideoDecodingModel staged, VideoDecodingModel original, string format)
+    private static void RequireEquivalentInput(VideoDecodingModel staged, VideoDecodingModel original, string format,
+        bool normalizeVideo)
     {
         var source = original.Properties;
         var output = staged.Properties;
         if (staged.StreamCount != ExpectedStreamCount(original) || staged.VideoIndex != 0
             || staged.VideoPacketCount != original.VideoPacketCount
             || (original.AudioIndex is null ? staged.AudioIndex is not null : staged.AudioIndex != 1)
-            || output.Container != format || output.VideoCodec != source.VideoCodec || output.HasLocationMetadata
+            || output.Container != format || output.VideoCodec != (normalizeVideo ? "h264" : source.VideoCodec)
+            || output.HasLocationMetadata || (output.Rotation != 0 && !SupportsRotation(staged))
+            || (normalizeVideo && staged.PixelFormat != "yuv420p")
             || !SupportsAudioCopy(format, output.AudioCodec) || output.Rotation != source.Rotation
             || output.Width != source.Width || output.Height != source.Height
             || output.PixelAspectNumerator != source.PixelAspectNumerator
@@ -148,6 +155,22 @@ public sealed class VideoTranscodingDecoder(string executablePath)
             or "pcm_s32le" or "pcm_s32be") => true,
         _ => false
     };
+
+    private static bool SupportsRotation(VideoDecodingModel video) =>
+        video.FieldOrder == "progressive" && video.PixelFormat is { } pixels
+        && (pixels.StartsWith("yuv420p", StringComparison.Ordinal) || pixels.StartsWith("yuv422p", StringComparison.Ordinal)
+            || pixels is "yuvj420p" or "yuvj422p" or "nv12" or "nv16" or "uyvy422" or "yuyv422");
+
+    private static string[] NormalizedVideoOptions(VideoDecodingModel video)
+    {
+        if (video.Properties.Width % 2 != 0 || video.Properties.Height % 2 != 0)
+            throw new PhotoContentInvalidException();
+
+        var filter = video.FieldOrder == "progressive" ? "setfield=prog"
+            : "bwdif=mode=send_frame:parity=auto:deint=interlaced,setfield=prog";
+        return ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "14",
+            "-fps_mode", "passthrough", "-enc_time_base:v", "demux", "-vf", filter];
+    }
 
     private static string[] NormalizedAudioOptions(string format, long sourceBytes) => format switch
     {
