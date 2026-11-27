@@ -43,8 +43,9 @@ internal sealed class FfprobeVideoProfileDecoder(string executablePath)
 
             if (!source && !webm && tracks.GetArrayLength() != iso.TrackCount) throw new PhotoContentInvalidException();
 
+            var completePresentation = tracks.GetArrayLength() == (audioIndex is null ? 1 : 2);
             if (playback && (container != "mp4" || videoCodec != "h264" || hasLocation
-                || tracks.GetArrayLength() != (audioIndex is null ? 1 : 2)
+                || !completePresentation
                 || audioIndex is not null && (audioCodec != "aac" || audioProfile != "LC")))
                 throw new PhotoContentInvalidException();
 
@@ -55,7 +56,7 @@ internal sealed class FfprobeVideoProfileDecoder(string executablePath)
             var average = MediaRationalModel.Parse(Text(video, "avg_frame_rate"), '/');
             var (frameRate, variable, measuredDuration) = packets.Measure(nominal, average, webm, source);
             var duration = Math.Max(measuredDuration, Math.Max(Duration(video), Duration(audio)));
-            if (!webm) duration = Math.Max(duration, Duration(format));
+            if (!webm && completePresentation) duration = Math.Max(duration, Duration(format));
             if (duration <= 0 || duration > (source ? 300m : 300.250m)) throw new PhotoContentInvalidException();
 
             await RequireDecodedFrameAsync(path, webm, videoIndex, "video", cancellationToken);
