@@ -65,7 +65,8 @@ internal sealed class FfprobeVideoProfileDecoder(string executablePath)
             var properties = new MediaVideoPropertiesModel(container, videoCodec, audioCodec, duration, width, height,
                 aspect.Numerator, aspect.Denominator, frameRate.Numerator, frameRate.Denominator, rotation, variable,
                 channels, sampleRate, hasLocation, audioProfile);
-            return new VideoDecodingModel(properties, mediaType, videoIndex, audioIndex, tracks.GetArrayLength());
+            return new VideoDecodingModel(properties, mediaType, videoIndex, audioIndex, tracks.GetArrayLength(),
+                packets.VideoPacketCount);
         }
         catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException
             or OverflowException or EndOfStreamException)
