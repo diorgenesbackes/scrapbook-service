@@ -1,5 +1,6 @@
 using System.Globalization;
 using Amazon;
+using Amazon.MediaConvert;
 using Amazon.Runtime;
 using Amazon.S3;
 using Amazon.SimpleNotificationService;
@@ -80,6 +81,7 @@ SubmissionProtectionOptions submissionProtection;
 PhotoSubmissionsOptions photoSubmissions;
 EventStructuralLockOptions eventStructuralLock;
 MediaProcessingOptions mediaProcessing;
+MediaAudioProcessingOptions mediaAudioProcessing;
 try
 {
     database = DatabaseOptions.FromConfiguration(builder.Configuration);
@@ -91,6 +93,8 @@ try
     eventStructuralLock = EventStructuralLockOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment());
     mediaProcessing = MediaProcessingOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(),
         photoSubmissions, eventStructuralLock);
+    mediaAudioProcessing = MediaAudioProcessingOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(),
+        photoSubmissions, mediaProcessing, eventStructuralLock);
     var isContainer = string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"),
         "true", StringComparison.OrdinalIgnoreCase);
     identity = DevelopmentIdentityOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(), isContainer);
@@ -241,6 +245,24 @@ if (mediaProcessing.Enabled)
     builder.Services.AddHostedService<MediaOutboxPublisherWorker>();
     builder.Services.AddHostedService<MediaAdmissionWorker>();
     builder.Services.AddHostedService<MediaPreparationWorker>();
+}
+if (mediaAudioProcessing.Enabled)
+{
+    var settings = mediaAudioProcessing.Settings;
+    builder.Services.AddSingleton(settings);
+    builder.Services.AddScoped<IMediaAudioRepository, MediaAudioRepository>();
+    builder.Services.AddScoped<MediaAudioPreparationService>();
+    builder.Services.AddSingleton(_ => new AudioTranscodingDecoder(photoSubmissions.VideoProbePath));
+    builder.Services.AddSingleton<IMediaAudioStorage, S3MediaAudioStorage>();
+    builder.Services.AddSingleton<IAmazonMediaConvert>(_ => new AmazonMediaConvertClient(
+        MessagingConfiguration(new AmazonMediaConvertConfig(), settings.Region, mediaAudioProcessing.MediaConvertServiceUrl)));
+    builder.Services.AddSingleton<IMediaTranscodingProvider, MediaConvertProvider>();
+    builder.Services.AddKeyedSingleton<IAmazonSQS>(MediaAudioProcessingOptions.SectionName, (_, _) =>
+        new AmazonSQSClient(MessagingConfiguration(new AmazonSQSConfig(), settings.Region, mediaAudioProcessing.SqsServiceUrl)));
+    builder.Services.AddSingleton<IMediaAudioResultQueue>(services => new SqsMediaAudioResultConsumer(
+        services.GetRequiredKeyedService<IAmazonSQS>(MediaAudioProcessingOptions.SectionName), mediaAudioProcessing.ResultQueueUrl));
+    builder.Services.AddHostedService<MediaAudioPreparationWorker>();
+    builder.Services.AddHostedService<MediaAudioResultWorker>();
 }
 builder.Services.AddSingleton<IInvitationTokenCodec>(new InvitationTokenCodec(
     invitationProtection.HashKeyId, invitationProtection.HashKeys, invitationProtection.EncryptionKeyId,

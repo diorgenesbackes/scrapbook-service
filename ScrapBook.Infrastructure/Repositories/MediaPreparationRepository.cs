@@ -191,6 +191,10 @@ public sealed class MediaPreparationRepository(ScrapBookDbContext context) : IMe
             """, cancellationToken);
 
     public Task SetPhotoStateAsync(MediaJobEntity job, string jobState, string fileState, string? variantState, string? errorCode,
+        DateTimeOffset? retryAt, DateTimeOffset now, CancellationToken cancellationToken) =>
+        SetJobStateAsync(job, jobState, fileState, variantState, errorCode, retryAt, now, cancellationToken);
+
+    internal Task SetJobStateAsync(MediaJobEntity job, string jobState, string fileState, string? variantState, string? errorCode,
         DateTimeOffset? retryAt, DateTimeOffset now, CancellationToken cancellationToken)
     {
         var terminalAt = retryAt is null ? now : (DateTimeOffset?)null;
@@ -258,10 +262,10 @@ public sealed class MediaPreparationRepository(ScrapBookDbContext context) : IMe
             JsonSerializer.Deserialize<MediaVariantReferenceModel[]>(row.Variants) ?? []);
     }
 
-    private Task<T?> QueryAsync<T>(FormattableString sql, CancellationToken cancellationToken) =>
+    internal Task<T?> QueryAsync<T>(FormattableString sql, CancellationToken cancellationToken) =>
         ExecuteAsync(async () => (await context.Database.SqlQuery<T>(sql).ToListAsync(cancellationToken)).SingleOrDefault());
 
-    private async Task RequireWriteAsync(FormattableString sql, CancellationToken cancellationToken)
+    internal async Task RequireWriteAsync(FormattableString sql, CancellationToken cancellationToken)
     {
         var rows = await ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync(sql, cancellationToken));
         if (rows != 1) throw new MediaPreparationWriteException();

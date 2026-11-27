@@ -3,7 +3,7 @@ using ScrapBook.Domain.Exceptions;
 namespace ScrapBook.Infrastructure.Decoders;
 
 internal sealed class AudioTrackTimingModel(string codec, bool isDefault, int sampleRate,
-    int timeBaseNumerator, int timeBaseDenominator)
+    int channels, string? profile, int timeBaseNumerator, int timeBaseDenominator)
 {
     private readonly decimal timestampStep = (decimal)timeBaseNumerator / timeBaseDenominator;
     private long decodedSamples;
@@ -12,6 +12,9 @@ internal sealed class AudioTrackTimingModel(string codec, bool isDefault, int sa
 
     public string Codec => codec;
     public bool IsDefault => isDefault;
+    public int Channels => channels;
+    public int SampleRate => sampleRate;
+    public string? Profile => profile;
     public decimal? PresentationStart => firstTimestamp is { } start ? Timestamp(start) : null;
 
     public void AddFrame(int samples, long? timestamp)

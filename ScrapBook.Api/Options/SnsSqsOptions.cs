@@ -36,7 +36,7 @@ internal sealed record SnsSqsOptions(bool Enabled, string Region, string TopicAr
             ReadEndpoint(section, development, sectionName, "SqsServiceUrl"));
     }
 
-    private static string? ReadEndpoint(IConfiguration section, bool development, string sectionName, string name)
+    internal static string? ReadEndpoint(IConfiguration section, bool development, string sectionName, string name)
     {
         var value = section[name];
         if (value is null) return null;
@@ -44,7 +44,7 @@ internal sealed record SnsSqsOptions(bool Enabled, string Region, string TopicAr
         return RequireUrl(value, true, sectionName, name).AbsoluteUri;
     }
 
-    private static Uri RequireUrl(string? value, bool development, string sectionName, string name)
+    internal static Uri RequireUrl(string? value, bool development, string sectionName, string name)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.Host)
             || uri.UserInfo.Length > 0 || uri.Query.Length > 0 || uri.Fragment.Length > 0
@@ -55,7 +55,7 @@ internal sealed record SnsSqsOptions(bool Enabled, string Region, string TopicAr
         return uri;
     }
 
-    private static bool IsStandardName(string name) => name.Length is > 0 and <= 80
+    internal static bool IsStandardName(string name) => name.Length is > 0 and <= 80
         && name.All(character => IsLowerLetter(character) || character is >= 'A' and <= 'Z' or '_' or '-' || IsDigit(character));
 
     private static bool IsLowerLetter(char character) => character is >= 'a' and <= 'z';
