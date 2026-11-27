@@ -38,6 +38,16 @@ if (args is [ProcessPhotoSubmissionDecoder.Argument, var length])
         : ProcessPhotoSubmissionDecoder.InvalidContentExitCode;
 }
 
+if (args is [ProcessPhotoVariantProcessor.Argument, var photoLength, var imageSide, var thumbnailSide, var quality])
+{
+    return int.TryParse(photoLength, NumberStyles.None, CultureInfo.InvariantCulture, out var bytes)
+        && int.TryParse(imageSide, NumberStyles.None, CultureInfo.InvariantCulture, out var imageMaximum)
+        && int.TryParse(thumbnailSide, NumberStyles.None, CultureInfo.InvariantCulture, out var thumbnailMaximum)
+        && int.TryParse(quality, NumberStyles.None, CultureInfo.InvariantCulture, out var jpegQuality)
+        ? await PhotoVariantRunner.RunAsync(bytes, new(imageMaximum, thumbnailMaximum, jpegQuality), CancellationToken.None)
+        : ProcessPhotoSubmissionDecoder.InvalidContentExitCode;
+}
+
 if (args is [EventStructuralLockRecoveryRunner.Argument, .. var recoveryArguments])
 {
     using var cancellation = new CancellationTokenSource();
@@ -69,6 +79,7 @@ InvitationProtectionOptions invitationProtection;
 SubmissionProtectionOptions submissionProtection;
 PhotoSubmissionsOptions photoSubmissions;
 EventStructuralLockOptions eventStructuralLock;
+MediaProcessingOptions mediaProcessing;
 try
 {
     database = DatabaseOptions.FromConfiguration(builder.Configuration);
@@ -78,6 +89,7 @@ try
     photoSubmissions = PhotoSubmissionsOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(),
         submissionProtection.KeyId is not null);
     eventStructuralLock = EventStructuralLockOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment());
+    mediaProcessing = MediaProcessingOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(), photoSubmissions);
     var isContainer = string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"),
         "true", StringComparison.OrdinalIgnoreCase);
     identity = DevelopmentIdentityOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(), isContainer);
@@ -178,18 +190,21 @@ if (photoSubmissions.Enabled)
     builder.Services.AddHostedService<PhotoReceiptWorker>();
     builder.Services.AddHostedService<PhotoSubmissionWorker>();
 }
-if (eventStructuralLock.Enabled)
+if (eventStructuralLock.Enabled || mediaProcessing.Enabled)
 {
     builder.Services.AddScoped<IOutboxRepository, OutboxRepository>();
+}
+if (eventStructuralLock.Enabled)
+{
     builder.Services.AddScoped<IEventStructuralLockRepository, EventStructuralLockRepository>();
     builder.Services.AddScoped<OutboxPublisherService>();
     builder.Services.AddScoped<EventStructuralLockService>();
     builder.Services.AddScoped<EventStructuralLockMonitoringService>();
     builder.Services.AddSingleton<IAmazonSimpleNotificationService>(_ =>
         new AmazonSimpleNotificationServiceClient(MessagingConfiguration(new AmazonSimpleNotificationServiceConfig(),
-            eventStructuralLock.SnsServiceUrl)));
+            eventStructuralLock.Region, eventStructuralLock.SnsServiceUrl)));
     builder.Services.AddKeyedSingleton<IAmazonSQS>(EventStructuralLockOptions.SectionName, (_, _) =>
-        new AmazonSQSClient(MessagingConfiguration(new AmazonSQSConfig(), eventStructuralLock.SqsServiceUrl)));
+        new AmazonSQSClient(MessagingConfiguration(new AmazonSQSConfig(), eventStructuralLock.Region, eventStructuralLock.SqsServiceUrl)));
     builder.Services.AddSingleton<IOutboxPublisher>(services => new SnsOutboxPublisher(
         services.GetRequiredService<IAmazonSimpleNotificationService>(), eventStructuralLock.TopicArn));
     builder.Services.AddSingleton<IEventStructuralLockQueue>(services => new SqsEventStructuralLockConsumer(
@@ -197,6 +212,34 @@ if (eventStructuralLock.Enabled)
     builder.Services.AddHostedService<OutboxPublisherWorker>();
     builder.Services.AddHostedService<OutboxMonitoringWorker>();
     builder.Services.AddHostedService<EventStructuralLockWorker>();
+}
+if (mediaProcessing.Enabled)
+{
+    builder.Services.AddScoped<MediaPreparationRepository>();
+    builder.Services.AddScoped<IMediaAdmissionRepository>(services => services.GetRequiredService<MediaPreparationRepository>());
+    builder.Services.AddScoped<IMediaPreparationRepository>(services => services.GetRequiredService<MediaPreparationRepository>());
+    builder.Services.AddScoped<MediaAdmissionService>();
+    builder.Services.AddScoped<MediaPreparationService>();
+    builder.Services.AddScoped<MediaOutboxPublisherService>(services => new MediaOutboxPublisherService(
+        services.GetRequiredService<IOutboxRepository>(),
+        services.GetRequiredKeyedService<IOutboxPublisher>(MediaProcessingOptions.SectionName),
+        services.GetRequiredService<IMediaAdmissionRepository>(),
+        services.GetRequiredService<IMediaPreparationRepository>(),
+        services.GetRequiredService<TimeProvider>()));
+    builder.Services.AddKeyedSingleton<IAmazonSimpleNotificationService>(MediaProcessingOptions.SectionName, (_, _) =>
+        new AmazonSimpleNotificationServiceClient(MessagingConfiguration(new AmazonSimpleNotificationServiceConfig(),
+            mediaProcessing.Region, mediaProcessing.SnsServiceUrl)));
+    builder.Services.AddKeyedSingleton<IAmazonSQS>(MediaProcessingOptions.SectionName, (_, _) =>
+        new AmazonSQSClient(MessagingConfiguration(new AmazonSQSConfig(), mediaProcessing.Region, mediaProcessing.SqsServiceUrl)));
+    builder.Services.AddKeyedSingleton<IOutboxPublisher>(MediaProcessingOptions.SectionName, (services, _) => new SnsOutboxPublisher(
+        services.GetRequiredKeyedService<IAmazonSimpleNotificationService>(MediaProcessingOptions.SectionName), mediaProcessing.TopicArn));
+    builder.Services.AddSingleton<IMediaConfirmationQueue>(services => new SqsMediaConfirmationConsumer(
+        services.GetRequiredKeyedService<IAmazonSQS>(MediaProcessingOptions.SectionName), mediaProcessing.QueueUrl));
+    builder.Services.AddSingleton<IMediaVariantStorage, S3MediaVariantStorage>();
+    builder.Services.AddSingleton<IPhotoVariantProcessor, ProcessPhotoVariantProcessor>();
+    builder.Services.AddHostedService<MediaOutboxPublisherWorker>();
+    builder.Services.AddHostedService<MediaAdmissionWorker>();
+    builder.Services.AddHostedService<MediaPreparationWorker>();
 }
 builder.Services.AddSingleton<IInvitationTokenCodec>(new InvitationTokenCodec(
     invitationProtection.HashKeyId, invitationProtection.HashKeys, invitationProtection.EncryptionKeyId,
@@ -254,18 +297,18 @@ AmazonS3Config StorageConfiguration(string? serviceUrl)
     return config;
 }
 
-T MessagingConfiguration<T>(T config, string? serviceUrl) where T : ClientConfig
+static T MessagingConfiguration<T>(T config, string region, string? serviceUrl) where T : ClientConfig
 {
     config.IgnoreConfiguredEndpointUrls = true;
     config.MaxErrorRetry = 0;
     if (serviceUrl is not null)
     {
         config.ServiceURL = serviceUrl;
-        config.AuthenticationRegion = eventStructuralLock.Region;
+        config.AuthenticationRegion = region;
     }
     else
     {
-        config.RegionEndpoint = RegionEndpoint.GetBySystemName(eventStructuralLock.Region);
+        config.RegionEndpoint = RegionEndpoint.GetBySystemName(region);
     }
     return config;
 }

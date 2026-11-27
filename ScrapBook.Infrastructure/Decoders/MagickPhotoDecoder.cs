@@ -17,7 +17,8 @@ public static class MagickPhotoDecoder
           <policy domain="filter" rights="none" pattern="*" />
           <policy domain="path" rights="none" pattern="@*" />
           <policy domain="coder" rights="none" pattern="*" />
-          <policy domain="coder" rights="read" pattern="{JPEG,PNG,HEIC}" />
+          <policy domain="coder" rights="read" pattern="{PNG,HEIC}" />
+          <policy domain="coder" rights="read|write" pattern="JPEG" />
           <policy domain="resource" name="map" value="0" />
         </policymap>
         """;
@@ -25,6 +26,56 @@ public static class MagickPhotoDecoder
     public static PhotoImageModel Decode(byte[] bytes)
     {
         var (format, mediaType, container) = Detect(bytes);
+        return Read(bytes, format, image =>
+        {
+            var orientation = (short)image.Orientation;
+            return new PhotoImageModel(mediaType, container, (int)image.Width, (int)image.Height,
+                orientation is >= 1 and <= 8 ? orientation : null);
+        });
+    }
+
+    public static PhotoVariantSetModel Prepare(byte[] bytes, PhotoPreparationProfileModel profile)
+    {
+        var (format, _, _) = Detect(bytes);
+        return Read(bytes, format, image =>
+        {
+            image.AutoOrient();
+            image.TransformColorSpace(ColorProfiles.SRGB);
+            image.ColorSpace = ColorSpace.sRGB;
+            image.BackgroundColor = MagickColors.White;
+            image.Alpha(AlphaAction.Remove);
+            image.Strip();
+            using var thumbnail = image.Clone();
+            var sourceWidth = (int)image.Width;
+            var sourceHeight = (int)image.Height;
+            return new PhotoVariantSetModel(sourceWidth, sourceHeight,
+                Encode(image, profile.ImageMaximumSide, profile.Quality),
+                Encode(thumbnail, profile.ThumbnailMaximumSide, profile.Quality));
+        });
+    }
+
+    private static PhotoVariantModel Encode(IMagickImage<byte> image, int maximumSide, int quality)
+    {
+        if (Math.Max(image.Width, image.Height) > maximumSide)
+        {
+            var scale = (double)maximumSide / Math.Max(image.Width, image.Height);
+            var width = (uint)Math.Max(1, Math.Round(image.Width * scale));
+            var height = (uint)Math.Max(1, Math.Round(image.Height * scale));
+            image.Resize(new MagickGeometry(width, height) { IgnoreAspectRatio = true });
+        }
+        image.Quality = (uint)quality;
+        var bytes = image.ToByteArray(MagickFormat.Jpeg);
+        using var verified = new MagickImage(bytes, MagickFormat.Jpeg);
+        if (verified.Format != MagickFormat.Jpeg || verified.Width != image.Width || verified.Height != image.Height
+            || verified.ProfileNames.Any() || verified.Orientation is not Orientation.Undefined and not Orientation.TopLeft)
+        {
+            throw new MediaOutputInvalidException();
+        }
+        return new PhotoVariantModel(bytes, (int)verified.Width, (int)verified.Height);
+    }
+
+    private static T Read<T>(byte[] bytes, MagickFormat format, Func<IMagickImage<byte>, T> operation)
+    {
         Configure();
         try
         {
@@ -39,9 +90,7 @@ public static class MagickPhotoDecoder
             if (images.Count != 1 || hasWarning) throw new PhotoContentInvalidException();
             var image = images[0];
             CheckDimensions(image.Width, image.Height);
-            var orientation = (short)image.Orientation;
-            return new PhotoImageModel(mediaType, container, (int)image.Width, (int)image.Height,
-                orientation is >= 1 and <= 8 ? orientation : null);
+            return operation(image);
         }
         catch (MagickResourceLimitErrorException)
         {
