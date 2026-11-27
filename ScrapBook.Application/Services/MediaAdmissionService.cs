@@ -1,6 +1,6 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 using ScrapBook.Application.Codecs;
+using ScrapBook.Domain.Entities;
 using ScrapBook.Domain.Interfaces;
 using ScrapBook.Domain.Models;
 using static ScrapBook.Application.Services.MediaConfirmationService;
@@ -9,9 +9,6 @@ namespace ScrapBook.Application.Services;
 
 public sealed class MediaAdmissionService(IMediaAdmissionRepository repository, IOutboxRepository outbox, TimeProvider clock)
 {
-    private const string Consumer = "media-preparation";
-    private const string Source = "internal";
-
     public async Task<MediaAdmissionResult> AdmitAsync(string body, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -22,7 +19,7 @@ public sealed class MediaAdmissionService(IMediaAdmissionRepository repository, 
         var hash = MediaConfirmationCodec.Hash(message);
         if (await repository.FindDeliveryAsync(Consumer, Source, message.MessageId, cancellationToken) is { } prior)
         {
-            return MatchesDelivery(prior.State, prior.PayloadHash, hash);
+            return DuplicateResult(prior, hash);
         }
         var row = await outbox.FindAsync(message.MessageId, cancellationToken);
         if (row is null || MediaConfirmationCodec.ReadOutbox(row) != message)
@@ -38,7 +35,7 @@ public sealed class MediaAdmissionService(IMediaAdmissionRepository repository, 
         }
         if (await repository.FindDeliveryAsync(Consumer, Source, message.MessageId, cancellationToken) is { } existing)
         {
-            return MatchesDelivery(existing.State, existing.PayloadHash, hash);
+            return DuplicateResult(existing, hash);
         }
         var now = clock.GetUtcNow();
         if (original!.ProcessingState != "pending" || now - message.ConfirmedAt > TimeSpan.FromDays(30))
@@ -58,7 +55,7 @@ public sealed class MediaAdmissionService(IMediaAdmissionRepository repository, 
         return MediaAdmissionResult.Admitted;
     }
 
-    private static MediaAdmissionResult MatchesDelivery(string state, byte[] persisted, byte[] incoming) =>
-        state == "completed" && CryptographicOperations.FixedTimeEquals(persisted, incoming)
+    private static MediaAdmissionResult DuplicateResult(ProcessedMessageEntity delivery, byte[] hash) =>
+        MatchesDelivery(delivery, hash)
             ? MediaAdmissionResult.Duplicate : MediaAdmissionResult.Quarantined;
 }

@@ -89,7 +89,8 @@ try
     photoSubmissions = PhotoSubmissionsOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(),
         submissionProtection.KeyId is not null);
     eventStructuralLock = EventStructuralLockOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment());
-    mediaProcessing = MediaProcessingOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(), photoSubmissions);
+    mediaProcessing = MediaProcessingOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(),
+        photoSubmissions, eventStructuralLock);
     var isContainer = string.Equals(Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"),
         "true", StringComparison.OrdinalIgnoreCase);
     identity = DevelopmentIdentityOptions.FromConfiguration(builder.Configuration, builder.Environment.IsDevelopment(), isContainer);
