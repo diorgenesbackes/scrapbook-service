@@ -4,7 +4,7 @@ internal sealed class FfmpegTheoryAttribute : TheoryAttribute
 {
     public FfmpegTheoryAttribute()
     {
-        if (FfprobePath is null) Skip = "FFmpeg and FFprobe are required for the real audio fixtures.";
+        if (FfprobePath is null) Skip = "FFmpeg and FFprobe are required for these media fixtures.";
     }
 
     public static string? FfprobePath { get; } = FindFfprobe();
