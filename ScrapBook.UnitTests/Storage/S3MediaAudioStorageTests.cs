@@ -176,7 +176,11 @@ public sealed class S3MediaAudioStorageTests
         var hash = SHA256.HashData(bytes);
         return MediaPreparationTestFixture.Source() with
         {
-            Kind = "audio", ObjectKey = SourceKey, Size = bytes.Length, Sha256 = hash, OriginalSha256 = [.. hash]
+            Kind = "audio",
+            ObjectKey = SourceKey,
+            Size = bytes.Length,
+            Sha256 = hash,
+            OriginalSha256 = [.. hash]
         };
     }
 

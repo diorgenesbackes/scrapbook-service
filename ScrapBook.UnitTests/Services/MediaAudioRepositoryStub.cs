@@ -18,14 +18,17 @@ internal sealed class MediaAudioRepositoryStub : IMediaAudioRepository
     public List<(DateTimeOffset At, EventWriteTestTransaction Transaction)> Submissions { get; } = [];
     public List<(DateTimeOffset RequiredUntil, CancellationToken Token)> LeaseChecks { get; } = [];
     public List<(string State, string? JobId, byte[]? JobHash, string? Code, DateTimeOffset? FinishedAt,
-        EventWriteTestTransaction Transaction)> AttemptWrites { get; } = [];
+        EventWriteTestTransaction Transaction)> AttemptWrites
+    { get; } = [];
     public List<(string State, string? Code, DateTimeOffset At, EventWriteTestTransaction Transaction)> Releases { get; } = [];
     public List<(MediaAudioWorkModel Work, MediaAudioVariantModel Variant, EventWriteTestTransaction Transaction)> Promotions { get; } = [];
     public List<(string JobState, string FileState, string? VariantState, string? Code, DateTimeOffset? RetryAt,
-        EventWriteTestTransaction Transaction)> States { get; } = [];
+        EventWriteTestTransaction Transaction)> States
+    { get; } = [];
     public List<(MediaFailureEntity Failure, EventWriteTestTransaction Transaction)> Failures { get; } = [];
     public List<(MediaAudioWakeModel Target, string JobId, byte[] JobHash, string ExternalId, byte[] ExternalHash,
-        byte[] PayloadHash)> Wakes { get; } = [];
+        byte[] PayloadHash)> Wakes
+    { get; } = [];
 
     private EventWriteTestTransaction CurrentTransaction => Transactions[^1];
 
@@ -66,8 +69,11 @@ internal sealed class MediaAudioRepositoryStub : IMediaAudioRepository
         Attempt = new(700 + number, requestKey, outputPrefix, now, null, null, "claimed");
         Job = job with
         {
-            State = "running", ActiveAttemptId = Attempt.Id, AttemptCount = job.AttemptCount + 1,
-            LastAttemptNumber = number, Profile = profile
+            State = "running",
+            ActiveAttemptId = Attempt.Id,
+            AttemptCount = job.AttemptCount + 1,
+            LastAttemptNumber = number,
+            Profile = profile
         };
         return Task.FromResult(Attempt.Id);
     }

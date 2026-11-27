@@ -36,7 +36,11 @@ internal static class MediaAudioTestFixture
             Attempt = attempt,
             Job = Job() with
             {
-                State = "reconciling", ActiveAttemptId = attempt.Id, AttemptCount = 1, LastAttemptNumber = 1, Profile = plan
+                State = "reconciling",
+                ActiveAttemptId = attempt.Id,
+                AttemptCount = 1,
+                LastAttemptNumber = 1,
+                Profile = plan
             }
         };
     }
