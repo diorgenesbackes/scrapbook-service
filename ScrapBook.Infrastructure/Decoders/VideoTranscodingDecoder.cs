@@ -117,12 +117,25 @@ public sealed class VideoTranscodingDecoder(string executablePath)
             || output.HasLocationMetadata || (output.Rotation != 0 && !SupportsRotation(staged))
             || (normalizeVideo && staged.PixelFormat != "yuv420p")
             || !SupportsAudioCopy(format, output.AudioCodec) || output.Rotation != source.Rotation
-            || output.Width != source.Width || output.Height != source.Height
-            || output.PixelAspectNumerator != source.PixelAspectNumerator
-            || output.PixelAspectDenominator != source.PixelAspectDenominator
+            || !MatchesStagedRaster(output, source, normalizeVideo)
             || Math.Abs(output.Duration - source.Duration) > RemuxDurationTolerance)
             throw new PhotoContentInvalidException();
     }
+
+    private static bool MatchesStagedRaster(MediaVideoPropertiesModel output, MediaVideoPropertiesModel source, bool normalized)
+    {
+        if (!normalized)
+            return output.Width == source.Width && output.Height == source.Height
+                && output.PixelAspectNumerator == source.PixelAspectNumerator
+                && output.PixelAspectDenominator == source.PixelAspectDenominator;
+
+        if (output.Width != EvenFloor(source.Width) || output.Height != EvenFloor(source.Height)) return false;
+        var originalDisplayWidth = (decimal)source.Width * source.PixelAspectNumerator / source.PixelAspectDenominator;
+        var stagedDisplayWidth = (decimal)output.Width * output.PixelAspectNumerator / output.PixelAspectDenominator;
+        return Math.Abs(stagedDisplayWidth - originalDisplayWidth * output.Height / source.Height) <= 1m;
+    }
+
+    private static int EvenFloor(int pixels) => pixels - pixels % 2;
 
     private static int ExpectedStreamCount(VideoDecodingModel video) => video.AudioIndex is null ? 1 : 2;
 
@@ -163,11 +176,14 @@ public sealed class VideoTranscodingDecoder(string executablePath)
 
     private static string[] NormalizedVideoOptions(VideoDecodingModel video)
     {
-        if (video.Properties.Width % 2 != 0 || video.Properties.Height % 2 != 0)
-            throw new PhotoContentInvalidException();
+        var width = EvenFloor(video.Properties.Width);
+        var height = EvenFloor(video.Properties.Height);
+        if (width == 0 || height == 0) throw new PhotoContentInvalidException();
 
         var filter = video.FieldOrder == "progressive" ? "setfield=prog"
             : "bwdif=mode=send_frame:parity=auto:deint=interlaced,setfield=prog";
+        if (width != video.Properties.Width || height != video.Properties.Height)
+            filter += FormattableString.Invariant($",scale={width}:{height}");
         return ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "ultrafast", "-crf", "14",
             "-fps_mode", "passthrough", "-enc_time_base:v", "demux", "-vf", filter];
     }
