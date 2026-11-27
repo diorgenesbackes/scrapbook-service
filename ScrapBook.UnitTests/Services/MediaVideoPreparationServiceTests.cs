@@ -43,6 +43,34 @@ public sealed class MediaVideoPreparationServiceTests
         Assert.Equal(new MediaVideoProfileModel(expectedWidth, expectedHeight, 30, 1, expectedRotation), video);
     }
 
+    [Fact]
+    public async Task PreservesAPairOfSmallSourceDimensionsWithoutRequestingSpatialScalingAsync()
+    {
+        var source = SourceProperties with { Width = 24, Height = 24 };
+        var provider = new MediaTranscodingProviderStub();
+
+        Assert.True(await Service(Pending(), Storage(source), provider).PrepareNextAsync(CancellationToken.None));
+
+        var video = Assert.Single(provider.Submissions).Request.Video;
+        Assert.Equal(new MediaVideoProfileModel(24, 24, 30, 1, 0, UseSourceDimensions: true), video);
+    }
+
+    [Fact]
+    public async Task EndsPreparationWhenTheEncoderCannotRoundAnOddSmallSourceWithoutUpscalingAsync()
+    {
+        var repository = Pending();
+        var source = SourceProperties with { Width = 31, Height = 24 };
+        var provider = new MediaTranscodingProviderStub();
+
+        Assert.True(await Service(repository, Storage(source), provider).PrepareNextAsync(CancellationToken.None));
+
+        Assert.Empty(provider.Submissions);
+        Assert.Empty(repository.Inputs);
+        var transition = Assert.Single(repository.States);
+        Assert.Equal(("failed", "MEDIA_SOURCE_INVALID"), (transition.FileState, transition.Code));
+        Assert.Single(repository.Failures);
+    }
+
     [Theory]
     [InlineData(24000, 1001, false, 24000, 1001)]
     [InlineData(30000, 1001, false, 30000, 1001)]
