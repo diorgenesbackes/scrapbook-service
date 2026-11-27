@@ -254,6 +254,11 @@ if (mediaAudioProcessing.Enabled)
     builder.Services.AddScoped<MediaAudioPreparationService>();
     builder.Services.AddSingleton(_ => new AudioTranscodingDecoder(photoSubmissions.VideoProbePath));
     builder.Services.AddSingleton<IMediaAudioStorage, S3MediaAudioStorage>();
+    if (settings.VideoEnabled)
+    {
+        builder.Services.AddSingleton(_ => new VideoTranscodingDecoder(photoSubmissions.VideoProbePath));
+        builder.Services.AddSingleton<IMediaVideoStorage, S3MediaVideoStorage>();
+    }
     builder.Services.AddSingleton<IAmazonMediaConvert>(_ => new AmazonMediaConvertClient(
         MessagingConfiguration(new AmazonMediaConvertConfig(), settings.Region, mediaAudioProcessing.MediaConvertServiceUrl)));
     builder.Services.AddSingleton<IMediaTranscodingProvider, MediaConvertProvider>();

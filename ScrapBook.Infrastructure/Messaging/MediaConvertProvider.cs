@@ -11,7 +11,8 @@ public sealed class MediaConvertProvider(IAmazonMediaConvert client) : IMediaTra
 {
     private const string CorrelationKey = "requestKey";
     private const string AudioSelectorName = "Primary";
-    private const string PlaybackExtension = "m4a";
+    private const string AudioExtension = "m4a";
+    private const string VideoExtension = "mp4";
     private const int MaximumSearchPages = 5;
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan SearchClockTolerance = TimeSpan.FromSeconds(5);
@@ -115,10 +116,12 @@ public sealed class MediaConvertProvider(IAmazonMediaConvert client) : IMediaTra
     private static CreateJobRequest CreateRequest(MediaAudioRequestModel request)
     {
         var profile = request.Profile;
-        if (!request.OutputKey.EndsWith("." + PlaybackExtension, StringComparison.Ordinal) || profile.Channels is not (1 or 2))
+        var extension = request.Video is null ? AudioExtension : VideoExtension;
+        if (!request.OutputKey.EndsWith("." + extension, StringComparison.Ordinal)
+            || profile.Channels is < 0 or > 2 || request.Video is null && profile.Channels == 0)
             throw new MediaJobRejectedException(false);
 
-        var destination = S3Uri(request, request.OutputKey[..^(PlaybackExtension.Length + 1)]);
+        var destination = S3Uri(request, request.OutputKey[..^(extension.Length + 1)]);
         return new CreateJobRequest
         {
             Queue = profile.QueueArn,
@@ -127,23 +130,7 @@ public sealed class MediaConvertProvider(IAmazonMediaConvert client) : IMediaTra
             UserMetadata = new Dictionary<string, string> { [CorrelationKey] = request.RequestKey.ToString("N") },
             Settings = new JobSettings
             {
-                Inputs =
-                [
-                    new Input
-                    {
-                        FileInput = S3Uri(request, request.InputKey),
-                        TimecodeSource = InputTimecodeSource.ZEROBASED,
-                        AudioSelectors = new Dictionary<string, AudioSelector>
-                        {
-                            [AudioSelectorName] = new()
-                            {
-                                DefaultSelection = AudioDefaultSelection.DEFAULT,
-                                SelectorType = AudioSelectorType.TRACK,
-                                Tracks = [1]
-                            }
-                        }
-                    }
-                ],
+                Inputs = [PlaybackInput(request)],
                 OutputGroups =
                 [
                     new OutputGroup
@@ -153,42 +140,114 @@ public sealed class MediaConvertProvider(IAmazonMediaConvert client) : IMediaTra
                             Type = OutputGroupType.FILE_GROUP_SETTINGS,
                             FileGroupSettings = new FileGroupSettings { Destination = destination }
                         },
-                        Outputs = [PlaybackOutput(profile)]
+                        Outputs = [PlaybackOutput(request, extension)]
                     }
                 ]
             }
         };
     }
 
-    private static Output PlaybackOutput(MediaAudioProfileModel profile) => new()
+    private static Input PlaybackInput(MediaAudioRequestModel request)
     {
-        Extension = PlaybackExtension,
-        ContainerSettings = new ContainerSettings
+        var input = new Input
         {
-            Container = ContainerType.MP4,
-            Mp4Settings = new Mp4Settings { MoovPlacement = Mp4MoovPlacement.PROGRESSIVE_DOWNLOAD }
-        },
-        AudioDescriptions =
-        [
-            new AudioDescription
+            FileInput = S3Uri(request, request.InputKey),
+            TimecodeSource = InputTimecodeSource.ZEROBASED
+        };
+        if (request.Profile.Channels > 0)
+        {
+            input.AudioSelectors = new Dictionary<string, AudioSelector>
             {
-                AudioSourceName = AudioSelectorName,
-                CodecSettings = new AudioCodecSettings
+                [AudioSelectorName] = new()
                 {
-                    Codec = AudioCodec.AAC,
-                    AacSettings = new AacSettings
-                    {
-                        CodecProfile = AacCodecProfile.LC,
-                        Specification = AacSpecification.MPEG4,
-                        RateControlMode = AacRateControlMode.CBR,
-                        CodingMode = profile.Channels == 1 ? AacCodingMode.CODING_MODE_1_0 : AacCodingMode.CODING_MODE_2_0,
-                        SampleRate = profile.SampleRate,
-                        Bitrate = profile.Bitrate
-                    }
+                    DefaultSelection = AudioDefaultSelection.DEFAULT,
+                    SelectorType = AudioSelectorType.TRACK,
+                    Tracks = [1]
+                }
+            };
+        }
+        if (request.Video is { } video)
+            input.VideoSelector = new VideoSelector { Rotate = InputRotation(video.Rotation) };
+
+        return input;
+    }
+
+    private static InputRotate InputRotation(int counterClockwiseDegrees) => counterClockwiseDegrees switch
+    {
+        0 => InputRotate.DEGREE_0,
+        90 => InputRotate.DEGREES_270,
+        180 => InputRotate.DEGREES_180,
+        270 => InputRotate.DEGREES_90,
+        _ => throw new MediaJobRejectedException(false)
+    };
+
+    private static Output PlaybackOutput(MediaAudioRequestModel request, string extension)
+    {
+        var output = new Output
+        {
+            Extension = extension,
+            ContainerSettings = new ContainerSettings
+            {
+                Container = ContainerType.MP4,
+                Mp4Settings = new Mp4Settings { MoovPlacement = Mp4MoovPlacement.PROGRESSIVE_DOWNLOAD }
+            }
+        };
+        if (request.Profile.Channels > 0) output.AudioDescriptions = [PlaybackAudio(request.Profile)];
+        if (request.Video is { } video) output.VideoDescription = PlaybackVideo(video);
+
+        return output;
+    }
+
+    private static AudioDescription PlaybackAudio(MediaAudioProfileModel profile) => new()
+    {
+        AudioSourceName = AudioSelectorName,
+        CodecSettings = new AudioCodecSettings
+        {
+            Codec = AudioCodec.AAC,
+            AacSettings = new AacSettings
+            {
+                CodecProfile = AacCodecProfile.LC,
+                Specification = AacSpecification.MPEG4,
+                RateControlMode = AacRateControlMode.CBR,
+                CodingMode = profile.Channels == 1 ? AacCodingMode.CODING_MODE_1_0 : AacCodingMode.CODING_MODE_2_0,
+                SampleRate = profile.SampleRate,
+                Bitrate = profile.Bitrate
+            }
+        }
+    };
+
+    private static VideoDescription PlaybackVideo(MediaVideoProfileModel profile)
+    {
+        if (profile.Width <= 0 || profile.Height <= 0 || profile.Width % 2 != 0 || profile.Height % 2 != 0
+            || profile.FrameRateNumerator <= 0 || profile.FrameRateDenominator <= 0)
+            throw new MediaJobRejectedException(false);
+
+        return new VideoDescription
+        {
+            Width = profile.UseSourceDimensions ? null : profile.Width,
+            Height = profile.UseSourceDimensions ? null : profile.Height,
+            ScalingBehavior = profile.UseSourceDimensions ? null : ScalingBehavior.FIT_NO_UPSCALE,
+            CodecSettings = new VideoCodecSettings
+            {
+                Codec = VideoCodec.H_264,
+                H264Settings = new H264Settings
+                {
+                    CodecProfile = H264CodecProfile.MAIN,
+                    RateControlMode = H264RateControlMode.QVBR,
+                    QualityTuningLevel = H264QualityTuningLevel.SINGLE_PASS_HQ,
+                    MaxBitrate = 5_000_000,
+                    QvbrSettings = new H264QvbrSettings { QvbrQualityLevel = 7 },
+                    FramerateControl = H264FramerateControl.SPECIFIED,
+                    FramerateConversionAlgorithm = H264FramerateConversionAlgorithm.DUPLICATE_DROP,
+                    FramerateNumerator = profile.FrameRateNumerator,
+                    FramerateDenominator = profile.FrameRateDenominator,
+                    ParControl = H264ParControl.SPECIFIED,
+                    ParNumerator = 1,
+                    ParDenominator = 1
                 }
             }
-        ]
-    };
+        };
+    }
 
     private static MediaProviderJobModel ReadJob(Job? job)
     {
@@ -230,10 +289,10 @@ public sealed class MediaConvertProvider(IAmazonMediaConvert client) : IMediaTra
 
         var destination = group.OutputGroupSettings?.FileGroupSettings?.Destination;
         if (group.Outputs is not { } outputs) return (destination, null);
-        if (outputs is not [var output] || output.Extension is not (null or PlaybackExtension)
+        if (outputs is not [var output] || output.Extension is not (null or AudioExtension or VideoExtension)
             || !string.IsNullOrEmpty(output.NameModifier)) throw new MediaProviderUnavailableException();
 
-        return (destination, destination is not null && output.Extension is not null ? destination + "." + PlaybackExtension : null);
+        return (destination, destination is not null && output.Extension is not null ? destination + "." + output.Extension : null);
     }
 
     private static bool MatchesRequest(Job response, MediaProviderJobModel job, MediaAudioRequestModel request) =>

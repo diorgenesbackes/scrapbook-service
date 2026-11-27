@@ -22,12 +22,12 @@ public sealed class MediaAudioResultWorker(IMediaAudioResultQueue queue, IServic
             }
             catch (OperationCanceledException) when (deadline.IsCancellationRequested && !stoppingToken.IsCancellationRequested)
             {
-                logger.LogWarning("Audio result polling exceeded its time budget. {ErrorCode}", "MEDIA_AUDIO_QUEUE_TIMEOUT");
+                logger.LogWarning("Media transcoding result polling exceeded its time budget. {ErrorCode}", "MEDIA_AUDIO_QUEUE_TIMEOUT");
                 continue;
             }
             catch (MediaAudioResultQueueException)
             {
-                logger.LogWarning("Audio result polling unavailable. {ErrorCode}", "MEDIA_AUDIO_QUEUE_UNAVAILABLE");
+                logger.LogWarning("Media transcoding result polling unavailable. {ErrorCode}", "MEDIA_AUDIO_QUEUE_UNAVAILABLE");
                 await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
                 continue;
             }
@@ -41,7 +41,7 @@ public sealed class MediaAudioResultWorker(IMediaAudioResultQueue queue, IServic
         var callback = MediaAudioCallbackCodec.Read(delivery.Body);
         if (callback is null)
         {
-            logger.LogWarning("Audio result delivery rejected. {ErrorCode}", "MEDIA_AUDIO_CALLBACK_REJECTED");
+            logger.LogWarning("Media transcoding result delivery rejected. {ErrorCode}", "MEDIA_AUDIO_CALLBACK_REJECTED");
             return;
         }
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -55,12 +55,12 @@ public sealed class MediaAudioResultWorker(IMediaAudioResultQueue queue, IServic
         }
         catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            logger.LogWarning("Audio result exceeded its time budget. {ErrorCode}", "MEDIA_AUDIO_RESULT_TIMEOUT");
+            logger.LogWarning("Media transcoding result exceeded its time budget. {ErrorCode}", "MEDIA_AUDIO_RESULT_TIMEOUT");
         }
         catch (Exception error) when (error is PostgresUnavailableException or PostgresWriteRejectedException
             or MediaPreparationWriteException or MediaProviderUnavailableException or MediaAudioResultQueueException)
         {
-            logger.LogWarning("Audio result will be redelivered. {ErrorCode}", "MEDIA_AUDIO_RESULT_RETRY");
+            logger.LogWarning("Media transcoding result will be redelivered. {ErrorCode}", "MEDIA_AUDIO_RESULT_RETRY");
         }
     }
 }

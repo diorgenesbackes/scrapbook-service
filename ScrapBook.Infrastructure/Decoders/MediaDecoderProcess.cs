@@ -1,10 +1,11 @@
+using System.Globalization;
 using System.ComponentModel;
 using System.Diagnostics;
 using ScrapBook.Domain.Exceptions;
 
 namespace ScrapBook.Infrastructure.Decoders;
 
-internal static class AudioDecoderProcess
+internal static class MediaDecoderProcess
 {
     private const int MaximumDiagnosticOutput = 24 * 1024;
 
@@ -19,7 +20,14 @@ internal static class AudioDecoderProcess
     public static async Task<TResult> RunAsync<TResult>(string executable, string path, string[] arguments,
         Func<StreamReader, CancellationToken, Task<TResult>> captureOutputAsync, CancellationToken cancellationToken)
     {
-        using var process = new Process { StartInfo = StartInfo(executable, path, arguments) };
+        return await RunAsync(executable, path, arguments, captureOutputAsync, null, cancellationToken);
+    }
+
+    public static async Task<TResult> RunAsync<TResult>(string executable, string path, string[] arguments,
+        Func<StreamReader, CancellationToken, Task<TResult>> captureOutputAsync, long? maximumFileBytes,
+        CancellationToken cancellationToken)
+    {
+        using var process = new Process { StartInfo = StartInfo(executable, path, arguments, maximumFileBytes) };
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -67,8 +75,10 @@ internal static class AudioDecoderProcess
         if (exitCode != 0 || !string.IsNullOrWhiteSpace(diagnostics)) throw new PhotoContentInvalidException();
     }
 
-    private static ProcessStartInfo StartInfo(string executable, string path, string[] arguments)
+    private static ProcessStartInfo StartInfo(string executable, string path, string[] arguments, long? maximumFileBytes)
     {
+        if (!Path.IsPathFullyQualified(executable)) throw new PhotoDecoderUnavailableException();
+
         var linux = OperatingSystem.IsLinux();
         var info = new ProcessStartInfo(linux ? "/usr/bin/prlimit" : executable)
         {
@@ -80,8 +90,12 @@ internal static class AudioDecoderProcess
         };
         if (linux)
         {
-            foreach (var argument in new[] { "--as=805306368", "--cpu=25", "--", executable })
-                info.ArgumentList.Add(argument);
+            info.ArgumentList.Add("--as=805306368");
+            info.ArgumentList.Add("--cpu=25");
+            if (maximumFileBytes is { } limit)
+                info.ArgumentList.Add("--fsize=" + limit.ToString(CultureInfo.InvariantCulture));
+            info.ArgumentList.Add("--");
+            info.ArgumentList.Add(executable);
         }
 
         info.Environment.Clear();

@@ -39,8 +39,8 @@ public sealed class FfprobeAudioDecoder(string executablePath)
             var (primaryIndex, primary) = tracks.FirstOrDefault(track => track.Value.IsDefault);
             if (primary is null) (primaryIndex, primary) = tracks.First();
             if (playback && (container != "m4a" || streams.GetArrayLength() != 1 || primary.Codec != "aac"
-                || primary.Profile != "LC" || primary.Channels <= 0 || ContainsLocation(format)
-                || streams.EnumerateArray().Any(ContainsLocation))) throw new PhotoContentInvalidException();
+                || primary.Profile != "LC" || primary.Channels <= 0 || MediaLocationMetadata.ContainsLocation(format)
+                || streams.EnumerateArray().Any(MediaLocationMetadata.ContainsLocation))) throw new PhotoContentInvalidException();
             if (container == "ogg") await OggPageReader.RequireCompleteAsync(path, budget.Token);
             if (!await ReadFramesAsync(path, container, tracks, budget.Token))
                 throw new PhotoContentInvalidException();
@@ -80,39 +80,39 @@ public sealed class FfprobeAudioDecoder(string executablePath)
     private Task<string> ReadMetadataAsync(string path, bool webm, bool playback, CancellationToken cancellationToken)
     {
         var formats = playback ? "mov" : webm ? "matroska,webm" : "mp3,mov,wav,ogg";
-        var input = AudioDecoderProcess.InputOptions(formats, playback);
+        var input = MediaDecoderProcess.InputOptions(formats, playback);
         var formatTags = playback ? "format_tags" : "format_tags=major_brand,compatible_brands";
         var streamTags = playback ? "stream_tags" : "stream_tags=";
         var entries = $"format=format_name:{formatTags}:stream=index,codec_type,codec_name,sample_rate,channels,"
             + $"profile,time_base,nb_read_packets:{streamTags}:stream_disposition=default,attached_pic";
         string[] options = ["-count_packets", "-show_streams", "-show_format", "-show_entries", entries,
             "-output_format", "json", "-i", path];
-        return AudioDecoderProcess.RunAsync(executablePath, path, [.. input, .. options],
-            (reader, token) => AudioDecoderProcess.ReadBoundedAsync(reader, MaximumMetadataOutput, token), cancellationToken);
+        return MediaDecoderProcess.RunAsync(executablePath, path, [.. input, .. options],
+            (reader, token) => MediaDecoderProcess.ReadBoundedAsync(reader, MaximumMetadataOutput, token), cancellationToken);
     }
 
     private Task<bool> ReadFramesAsync(string path, string container, Dictionary<int, AudioTrackTimingModel> tracks,
         CancellationToken cancellationToken)
     {
-        var input = AudioDecoderProcess.InputOptions(FormatWhitelist(container), container == "m4a");
+        var input = MediaDecoderProcess.InputOptions(FormatWhitelist(container), container == "m4a");
         var mp3 = container == "mp3";
         string[] packetOptions = mp3 ? ["-show_packets"] : [];
         const string frameEntries = "frame=stream_index,best_effort_timestamp,nb_samples:frame_side_data=";
         var entries = mp3 ? frameEntries + ":packet=pos,size,flags:packet_side_data=" : frameEntries;
         string[] options = ["-select_streams", "a", "-show_frames", .. packetOptions, "-show_entries", entries,
             "-output_format", "compact=p=1:nk=0", "-i", path];
-        return AudioDecoderProcess.RunAsync(executablePath, path, [.. input, .. options],
+        return MediaDecoderProcess.RunAsync(executablePath, path, [.. input, .. options],
             (reader, token) => CaptureFramesAsync(reader, tracks, mp3 ? path : null, token), cancellationToken);
     }
 
     private Task<string> VerifyDecodeAsync(string path, string container, CancellationToken cancellationToken)
     {
         var ffmpeg = Path.Combine(Path.GetDirectoryName(executablePath)!, "ffmpeg");
-        var input = AudioDecoderProcess.InputOptions(FormatWhitelist(container), container == "m4a");
+        var input = MediaDecoderProcess.InputOptions(FormatWhitelist(container), container == "m4a");
         string[] options = ["-hide_banner", "-nostdin", "-nostats", "-xerror", "-max_error_rate", "0",
             "-filter_threads", "1", .. input, "-i", path, "-map", "0:a", "-threads", "1", "-f", "null", "-"];
-        return AudioDecoderProcess.RunAsync(ffmpeg, path, options,
-            (reader, token) => AudioDecoderProcess.ReadBoundedAsync(reader, 1024, token), cancellationToken);
+        return MediaDecoderProcess.RunAsync(ffmpeg, path, options,
+            (reader, token) => MediaDecoderProcess.ReadBoundedAsync(reader, 1024, token), cancellationToken);
     }
 
     internal static string FormatWhitelist(string container) => container switch
@@ -132,20 +132,6 @@ public sealed class FfprobeAudioDecoder(string executablePath)
             ("matroska,webm", true) => ("audio/webm", "webm"),
             _ => throw new PhotoContentInvalidException()
         };
-
-    private static bool ContainsLocation(JsonElement media) => media.TryGetProperty("tags", out var tags)
-        && tags.EnumerateObject().Any(tag => IsLocationTag(tag.Name));
-
-    private static bool IsLocationTag(string name) =>
-        name.Contains("location", StringComparison.OrdinalIgnoreCase)
-        || name.Contains("latitude", StringComparison.OrdinalIgnoreCase)
-        || name.Contains("longitude", StringComparison.OrdinalIgnoreCase)
-        || name.Contains("altitude", StringComparison.OrdinalIgnoreCase)
-        || name.Contains("gps", StringComparison.OrdinalIgnoreCase)
-        || name.Contains("iso6709", StringComparison.OrdinalIgnoreCase)
-        || name.Contains("geotag", StringComparison.OrdinalIgnoreCase)
-        || name.Equals("loci", StringComparison.OrdinalIgnoreCase)
-        || name.Equals("©xyz", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsM4a(JsonElement format)
     {
