@@ -71,7 +71,7 @@ public sealed class AudioTranscodingDecoder(string executablePath)
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         budget.CancelAfter(NormalizeTimeout);
         var ffmpeg = Path.Combine(Path.GetDirectoryName(executablePath)!, "ffmpeg");
-        var input = AudioDecoderProcess.InputOptions(FfprobeAudioDecoder.FormatWhitelist(source.Container), source.Container == "m4a");
+        var input = MediaDecoderProcess.InputOptions(FfprobeAudioDecoder.FormatWhitelist(source.Container), source.Container == "m4a");
         var stream = "0:" + source.PrimaryIndex.ToString(CultureInfo.InvariantCulture);
         string[] arguments = ["-hide_banner", "-nostdin", "-nostats", "-y", "-xerror", "-max_error_rate", "0",
             "-filter_threads", "1", .. input, "-i", inputPath, "-map", stream, "-map_metadata", "-1", "-map_metadata:s:a", "-1",
@@ -79,8 +79,8 @@ public sealed class AudioTranscodingDecoder(string executablePath)
             "-fs", MaximumInputBytes.ToString(CultureInfo.InvariantCulture), .. options, outputPath];
         try
         {
-            await AudioDecoderProcess.RunAsync(ffmpeg, inputPath, arguments,
-                (reader, token) => AudioDecoderProcess.ReadBoundedAsync(reader, 1024, token), budget.Token);
+            await MediaDecoderProcess.RunAsync(ffmpeg, inputPath, arguments,
+                (reader, token) => MediaDecoderProcess.ReadBoundedAsync(reader, 1024, token), budget.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
