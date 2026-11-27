@@ -1,0 +1,286 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using ScrapBook.Application.Services;
+using ScrapBook.Domain.Entities;
+using ScrapBook.Domain.Exceptions;
+using ScrapBook.Domain.Models;
+
+namespace ScrapBook.UnitTests.Services;
+
+public sealed class MediaPreparationServiceTests
+{
+    private static readonly PhotoPreparationProfileModel Profile = new(2048, 400, 85);
+    private readonly MediaPreparationRepositoryStub repository = new() { Eligible = Job() };
+    private readonly MediaVariantStorageStub storage = new();
+    private readonly PhotoVariantProcessorStub processor = new();
+    private readonly EventTestTimeProvider clock = new() { Now = MediaPreparationTestFixture.Confirmation.ConfirmedAt.AddHours(2) };
+    private MediaPreparationService Service => new(repository, storage, processor, clock);
+
+    [Fact]
+    public async Task StaysIdleWhenNoPhotoIsEligibleAsync()
+    {
+        repository.Eligible = null;
+
+        Assert.False(await Service.PrepareNextAsync(CancellationToken.None));
+
+        Assert.Empty(repository.Starts);
+        Assert.Empty(storage.Reads);
+        Assert.Empty(storage.Stores);
+        Assert.Empty(processor.Calls);
+    }
+
+    [Fact]
+    public async Task PromotesBothVerifiedVersionsInTheSameAvailabilityTransactionAsync()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var verifyThumbnail = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        storage.VerifyAsync = async (key, result, token) =>
+        {
+            Assert.True(token.CanBeCanceled);
+            Assert.True(Assert.Single(repository.Transactions).Committed);
+            if (key.EndsWith("/thumbnail.jpg", StringComparison.Ordinal))
+            {
+                await verifyThumbnail.Task.WaitAsync(token);
+            }
+            return result;
+        };
+
+        var pending = Service.PrepareNextAsync(cancellation.Token);
+
+        Assert.Equal(2, storage.Stores.Count);
+        Assert.False(pending.IsCompleted);
+        Assert.Empty(repository.Promotions);
+        Assert.Empty(repository.States);
+        verifyThumbnail.SetResult();
+        Assert.True(await pending);
+
+        var start = Assert.Single(repository.Starts);
+        var read = Assert.Single(storage.Reads);
+        Assert.Equal(("private-media", "submissions/original/pinned", "confirmed-version"),
+            (read.Source.Bucket, read.Source.ObjectKey, read.Source.VersionId));
+        Assert.Equal(SHA256.HashData(storage.Original), read.Source.Sha256);
+        Assert.True(read.Token.CanBeCanceled);
+        Assert.StartsWith("submissions/derived/701/", start.Prefix);
+        Assert.Equal(clock.Now.AddMinutes(2), start.Until);
+        var convert = Assert.Single(processor.Calls);
+        Assert.Equal((storage.Original, Profile), (convert.Original, convert.Profile));
+        Assert.True(convert.Token.CanBeCanceled);
+        var available = Assert.Single(repository.States);
+        Assert.Equal(("completed", "available"), (available.JobState, available.FileState));
+        Assert.Collection(repository.Promotions,
+            entry => AssertPromotion(entry, start.Prefix, "image", "image-version", available.Transaction),
+            entry => AssertPromotion(entry, start.Prefix, "thumbnail", "thumb-version", available.Transaction));
+        Assert.Same(available.Transaction, Assert.Single(repository.Ends).Transaction);
+        Assert.Same(available.Transaction, repository.Transactions[1]);
+        Assert.True(available.Transaction.Committed);
+        Assert.Equal(cancellation.Token, available.Transaction.CommitToken);
+        var leaseCheck = Assert.Single(repository.LeaseChecks);
+        Assert.Equal((start.Lease, start.Job.Version + 1, start.Prefix, cancellation.Token),
+            (leaseCheck.Work.Lease, leaseCheck.Work.Job.Version, leaseCheck.Work.OutputPrefix, leaseCheck.Token));
+        Assert.Empty(repository.Failures);
+    }
+
+    [Theory]
+    [InlineData(0, 5)]
+    [InlineData(1, 15)]
+    [InlineData(2, 30)]
+    [InlineData(3, 60)]
+    public async Task KeepsTheFileProcessingWhenTheSecondVerificationNeedsARetryAsync(int attempts, int interval)
+    {
+        repository.Eligible = Job() with { AttemptCount = attempts, LastAttemptNumber = attempts };
+        storage.VerifyAsync = (key, result, _) => key.EndsWith("/thumbnail.jpg", StringComparison.Ordinal)
+            ? Task.FromException<MediaStoredVariantModel>(new MediaVariantStorageException()) : Task.FromResult(result);
+
+        Assert.True(await Service.PrepareNextAsync(CancellationToken.None));
+
+        Assert.Equal(2, storage.Stores.Count);
+        Assert.Empty(repository.Promotions);
+        Assert.Empty(repository.Failures);
+        var retry = Assert.Single(repository.States);
+        Assert.Equal(("pending", "processing", "MEDIA_STORAGE_UNAVAILABLE"), (retry.JobState, retry.FileState, retry.Code));
+        Assert.InRange(retry.RetryAt!.Value, clock.Now.AddSeconds(interval), clock.Now.AddSeconds(interval + 1));
+        Assert.True(retry.Transaction.Committed);
+        Assert.Equal("failed", Assert.Single(repository.Ends).State);
+    }
+
+    [Theory]
+    [InlineData("foreign-key")]
+    [InlineData("wrong-checksum")]
+    [InlineData("unversioned")]
+    public async Task RejectsASecondStoredVariantWithoutTheRequiredIdentityAsync(string defect)
+    {
+        storage.VerifyAsync = (key, result, _) => Task.FromResult(key.EndsWith("/thumbnail.jpg", StringComparison.Ordinal)
+            ? defect switch
+            {
+                "foreign-key" => result with { Key = "submissions/derived/702/other/thumbnail.jpg" },
+                "wrong-checksum" => result with { Sha256 = new byte[32] },
+                "unversioned" => result with { VersionId = "null" },
+                _ => throw new ArgumentOutOfRangeException(nameof(defect))
+            }
+            : result);
+
+        Assert.True(await Service.PrepareNextAsync(CancellationToken.None));
+
+        Assert.Empty(repository.Promotions);
+        AssertFailure("verify", "MEDIA_VARIANT_INVALID");
+    }
+
+    [Fact]
+    public async Task RejectsOutOfProfileDimensionsBeforeAnyOutputIsStoredAsync()
+    {
+        var variants = processor.Variants;
+        processor.Variants = variants with { Thumbnail = variants.Thumbnail with { Width = 401 } };
+
+        Assert.True(await Service.PrepareNextAsync(CancellationToken.None));
+
+        Assert.Empty(storage.Stores);
+        Assert.Empty(repository.Promotions);
+        AssertFailure("verify", "MEDIA_VARIANT_INVALID");
+    }
+
+    [Fact]
+    public async Task RejectsAnOriginalWithTheWrongChecksumBeforeCallingTheProcessorAsync()
+    {
+        storage.Original = [1, 2, 3, 4];
+
+        Assert.True(await Service.PrepareNextAsync(CancellationToken.None));
+
+        Assert.Empty(processor.Calls);
+        Assert.Empty(storage.Stores);
+        AssertFailure("prepare", "MEDIA_SOURCE_INTEGRITY");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AReplacedLeaseCanNeitherPublishNorFailTheCurrentAttemptAsync(bool secondWriteFails)
+    {
+        storage.VerifyAsync = (key, result, _) =>
+        {
+            if (key.EndsWith("/image.jpg", StringComparison.Ordinal)) return Task.FromResult(result);
+            repository.RetainsLease = false;
+            return secondWriteFails ? Task.FromException<MediaStoredVariantModel>(new MediaVariantStorageException()) : Task.FromResult(result);
+        };
+
+        Assert.True(await Service.PrepareNextAsync(CancellationToken.None));
+
+        Assert.Empty(repository.Promotions);
+        Assert.Empty(repository.States);
+        Assert.Empty(repository.Ends);
+        Assert.Empty(repository.Failures);
+        Assert.Single(repository.LeaseChecks);
+        Assert.False(repository.Transactions[1].Committed);
+    }
+
+    [Fact]
+    public async Task ANewServiceInstanceResumesAnInterruptedAttemptWithASeparatePrefixAsync()
+    {
+        using var cancellation = new CancellationTokenSource();
+        storage.VerifyAsync = (key, result, token) =>
+        {
+            if (key.EndsWith("/thumbnail.jpg", StringComparison.Ordinal)) cancellation.Cancel();
+            token.ThrowIfCancellationRequested();
+            return Task.FromResult(result);
+        };
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Service.PrepareNextAsync(cancellation.Token));
+        Assert.Empty(repository.States);
+        Assert.Empty(repository.Ends);
+        Assert.Empty(repository.Promotions);
+        Assert.Empty(repository.Failures);
+        var interrupted = Assert.Single(repository.Starts);
+        Assert.True(interrupted.Transaction.Committed);
+
+        clock.Now = interrupted.Until.AddSeconds(1);
+        repository.Eligible = interrupted.Job with { State = "processing", ActiveAttemptId = 7, LastAttemptNumber = 1, AttemptCount = 1 };
+        repository.Source = repository.Source! with { ProcessingState = "processing" };
+        storage.VerifyAsync = null;
+        Assert.True(await Service.PrepareNextAsync(CancellationToken.None));
+
+        var replacement = repository.Starts[1];
+        Assert.Equal(2, replacement.Number);
+        Assert.NotEqual(interrupted.RequestKey, replacement.RequestKey);
+        Assert.NotEqual(interrupted.Prefix, replacement.Prefix);
+        var closed = repository.Ends[0];
+        Assert.Equal((7L, "failed", "MEDIA_ATTEMPT_INTERRUPTED"), (closed.Id, closed.State, closed.Code));
+        Assert.Same(replacement.Transaction, closed.Transaction);
+        Assert.All(repository.Promotions, entry => Assert.StartsWith(replacement.Prefix, entry.Variant.Storage.Key));
+        Assert.Equal("available", Assert.Single(repository.States).FileState);
+    }
+
+    [Fact]
+    public async Task EmitsAStableTerminalIdentityForTheSameRetryCycleAsync()
+    {
+        repository.Eligible = Job() with { AttemptCount = 4, LastAttemptNumber = 4 };
+        storage.VerifyAsync = (_, _, _) => Task.FromException<MediaStoredVariantModel>(new MediaVariantStorageException());
+
+        Assert.True(await Service.PrepareNextAsync(CancellationToken.None));
+        var originalFailure = AssertFailure("verify", "MEDIA_ATTEMPTS_EXHAUSTED");
+        Assert.Empty(repository.Promotions);
+
+        repository.Eligible = Job() with { AttemptCount = 5, LastAttemptNumber = 5, ActiveAttemptId = 9, State = "processing" };
+        clock.Now = clock.Now.AddMinutes(2);
+        Assert.True(await Service.PrepareNextAsync(CancellationToken.None));
+        Assert.Equal(originalFailure.MessageId, repository.Failures[1].Result.MessageId);
+        Assert.Single(repository.Starts);
+
+        repository.Eligible = repository.Eligible with { RetryCycle = 2 };
+        Assert.True(await Service.PrepareNextAsync(CancellationToken.None));
+        Assert.NotEqual(originalFailure.MessageId, repository.Failures[2].Result.MessageId);
+    }
+
+    [Fact]
+    public async Task ReadsTheProjectionUsingAllThreeScopeIdentifiersAsync()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var confirmation = MediaPreparationTestFixture.Confirmation;
+        repository.Projection = new(confirmation.FileId, "processing", 1, []);
+
+        var file = await Service.GetFileAsync(confirmation.EventId, confirmation.RecordId, confirmation.FileId, cancellation.Token);
+
+        Assert.Equal(repository.Projection, file);
+        Assert.Equal((confirmation.EventId, confirmation.RecordId, confirmation.FileId, cancellation.Token), Assert.Single(repository.Reads));
+        Assert.Empty(file!.Variants);
+    }
+
+    private static void AssertPromotion(
+        (PhotoPreparationWorkModel Work, PreparedPhotoVariantModel Variant, EventWriteTestTransaction Transaction) entry,
+        string prefix, string kind, string version, EventWriteTestTransaction transaction)
+    {
+        Assert.Equal(kind, entry.Variant.Kind);
+        Assert.Equal(prefix + kind + ".jpg", entry.Variant.Storage.Key);
+        Assert.Equal(version, entry.Variant.Storage.VersionId);
+        Assert.Equal(701, entry.Work.Job.FileId);
+        Assert.Same(transaction, entry.Transaction);
+    }
+
+    private MediaFailureEntity AssertFailure(string stage, string code)
+    {
+        var failed = Assert.Single(repository.States);
+        Assert.Equal(("failed", "failed", "failed", code), (failed.JobState, failed.FileState, failed.VariantState, failed.Code));
+        Assert.Null(failed.RetryAt);
+        Assert.True(failed.Transaction.Committed);
+        var (failure, transaction) = Assert.Single(repository.Failures);
+        Assert.Same(failed.Transaction, transaction);
+        var confirmation = MediaPreparationTestFixture.Confirmation;
+        Assert.NotEqual(Guid.Empty, failure.MessageId);
+        Assert.Equal("record.media-preparation.failed.v1", failure.Type);
+        Assert.Equal((confirmation.EventId, confirmation.MessageId, confirmation.CorrelationId, clock.Now),
+            (failure.EventId, failure.CausationId, failure.CorrelationId, failure.OccurredAt));
+        using var payload = JsonDocument.Parse(failure.Payload);
+        Assert.Equal("560", payload.RootElement.GetProperty("recordId").GetString());
+        Assert.Equal("701", payload.RootElement.GetProperty("fileId").GetString());
+        Assert.Equal(1, payload.RootElement.GetProperty("profileVersion").GetInt32());
+        Assert.Equal(stage, payload.RootElement.GetProperty("stage").GetString());
+        Assert.Equal(code, payload.RootElement.GetProperty("code").GetString());
+        Assert.DoesNotContain("private-media", failure.Payload);
+        Assert.DoesNotContain("confirmed-version", failure.Payload);
+        return failure;
+    }
+
+    private static MediaJobEntity Job()
+    {
+        var confirmation = MediaPreparationTestFixture.Confirmation;
+        return new(3, confirmation.EventId, confirmation.RecordId, confirmation.FileId, 1, 4, "pending", 0, 1,
+            confirmation.MessageId, confirmation.CorrelationId, confirmation.ConfirmedAt, null, 0, JsonSerializer.Serialize(Profile));
+    }
+}

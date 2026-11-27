@@ -4,6 +4,7 @@ using ScrapBook.Infrastructure.Decoders;
 
 namespace ScrapBook.UnitTests.Decoders;
 
+[Collection(MagickPhotoTestCollection.Name)]
 public sealed class MagickPhotoDecoderTests
 {
     private const string SyntheticPng = "89504e470d0a1a0a0000000d4948445200000020000000200802000000fc18eda3"
