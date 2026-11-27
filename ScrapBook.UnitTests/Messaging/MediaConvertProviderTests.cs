@@ -133,6 +133,32 @@ public sealed class MediaConvertProviderTests
     }
 
     [Theory]
+    [InlineData(641, 480, 30, 1, 0, 2, "mp4")]
+    [InlineData(640, 0, 30, 1, 0, 2, "mp4")]
+    [InlineData(640, 480, 0, 1, 0, 2, "mp4")]
+    [InlineData(640, 480, 30, 0, 0, 2, "mp4")]
+    [InlineData(640, 480, 30, 1, 45, 2, "mp4")]
+    [InlineData(640, 480, 30, 1, 0, 3, "mp4")]
+    [InlineData(640, 480, 30, 1, 0, 2, "m4a")]
+    public async Task InvalidVideoJobSettingsNeverReachTheProviderAsync(int width, int height, int numerator,
+        int denominator, int rotation, int channels, string extension)
+    {
+        using var client = new MediaConvertClientStub();
+        var request = Request() with
+        {
+            Profile = Profile with { Channels = channels },
+            OutputKey = Path.ChangeExtension(OutputKey, extension),
+            Video = new(width, height, numerator, denominator, rotation)
+        };
+
+        var error = await Assert.ThrowsAsync<MediaJobRejectedException>(() =>
+            new MediaConvertProvider(client).CreateAsync(request, CancellationToken.None));
+
+        Assert.False(error.Retryable);
+        Assert.Empty(client.Creates);
+    }
+
+    [Theory]
     [InlineData("bad-request", false)]
     [InlineData("forbidden", false)]
     [InlineData("throttled", true)]
