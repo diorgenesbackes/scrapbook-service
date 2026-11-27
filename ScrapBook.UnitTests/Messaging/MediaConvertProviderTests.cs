@@ -137,8 +137,10 @@ public sealed class MediaConvertProviderTests
     public async Task ReadsTheExpectedM4aLocationFromTheCompletedJobAsync()
     {
         var job = Job(JobStatus.COMPLETE);
+        job.ClientRequestToken = RequestKey.ToString("N");
         job.Settings = new()
         {
+            Inputs = [new() { FileInput = $"s3://{Bucket}/{InputKey}" }],
             OutputGroups =
             [
                 new()
@@ -152,7 +154,13 @@ public sealed class MediaConvertProviderTests
 
         var result = await new MediaConvertProvider(client).GetAsync(ProviderJobId, CancellationToken.None);
 
-        Assert.Equal(ProviderJob(RequestKey, "complete", OutputKey), result);
+        Assert.Equal(ProviderJob(RequestKey, "complete", OutputKey) with
+        {
+            JobRoleArn = Settings.JobRoleArn,
+            ClientRequestToken = RequestKey.ToString("N"),
+            InputUri = $"s3://{Bucket}/{InputKey}",
+            OutputDestination = $"s3://{Bucket}/{OutputKey[..^4]}"
+        }, result);
         Assert.Equal(ProviderJobId, Assert.Single(client.Gets).Id);
     }
 
@@ -182,7 +190,7 @@ public sealed class MediaConvertProviderTests
 
         var found = await new MediaConvertProvider(client).FindAsync(Request(), Now, CancellationToken.None);
 
-        Assert.Equal(ProviderJob(RequestKey, "progressing"), found);
+        Assert.Equal(ProviderJob(RequestKey, "progressing") with { JobRoleArn = Settings.JobRoleArn }, found);
         Assert.Equal([("private-audio", "DESCENDING", (int?)20, (string?)null), ("private-audio", "DESCENDING", (int?)20, "page-two")],
             client.Queries);
     }
