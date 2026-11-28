@@ -1,3 +1,4 @@
+using ScrapBook.Application.Codecs;
 using ScrapBook.Domain.Entities;
 using ScrapBook.Domain.Interfaces;
 using ScrapBook.Domain.Models;
@@ -7,6 +8,7 @@ namespace ScrapBook.UnitTests.Services;
 internal sealed class MediaHistoryRepositoryStub : IMediaHistoryRepository
 {
     public List<(long EventId, long AfterId, int Limit, DateTimeOffset HistoricalBefore, CancellationToken Token)> Pages { get; } = [];
+    public List<(long EventId, Guid MessageId, CancellationToken Token)> FactReads { get; } = [];
     public List<(long EventId, long RecordId, long FileId, bool Locked, CancellationToken Token)> SourceReads { get; } = [];
     public List<(long EventId, long RecordId, CancellationToken Token)> ReceiptReads { get; } = [];
     public List<(long FileId, string Kind, int ProfileVersion, CancellationToken Token)> WorkReads { get; } = [];
@@ -27,6 +29,15 @@ internal sealed class MediaHistoryRepositoryStub : IMediaHistoryRepository
             .OrderBy(item => item.FileId).Take(limit)
             .Select(item => new MediaHistoryCandidateModel(item.RecordId, item.FileId)).ToArray();
         return Task.FromResult(files);
+    }
+
+    public Task<MediaHistoryCandidateModel?> FindByMessageIdAsync(long eventId, Guid messageId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        FactReads.Add((eventId, messageId, cancellationToken));
+        var item = Sources.Values.SingleOrDefault(source =>
+            source.EventId == eventId && MediaConfirmationCodec.MessageId(source.FileId) == messageId);
+        return Task.FromResult(item is null ? null : new MediaHistoryCandidateModel(item.RecordId, item.FileId));
     }
 
     public Task<MediaSourceEntity?> FindSourceAsync(long eventId, long recordId, long fileId, bool lockFile,
