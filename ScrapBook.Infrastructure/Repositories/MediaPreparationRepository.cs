@@ -56,11 +56,7 @@ public sealed class MediaPreparationRepository(ScrapBookDbContext context) : IMe
             VALUES ({consumer}, {source}, {message.MessageId}, {hash}, {message.CorrelationId}, 'completed', 1, {now})
             """, cancellationToken));
 
-    public Task<bool> InsertJobAsync(MediaConfirmationModel message, int profileVersion, string kind, string profile,
-        string[] variantKinds, DateTimeOffset now, CancellationToken cancellationToken) =>
-        InsertJobAsync(message, profileVersion, kind, profile, variantKinds, false, now, cancellationToken);
-
-    internal async Task<bool> InsertJobAsync(MediaConfirmationModel message, int profileVersion, string kind, string profile,
+    public async Task<bool> InsertJobAsync(MediaConfirmationModel message, int profileVersion, string kind, string profile,
         string[] variantKinds, bool isHistorical, DateTimeOffset now, CancellationToken cancellationToken)
     {
         var rows = await ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""

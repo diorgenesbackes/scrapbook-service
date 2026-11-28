@@ -14,6 +14,7 @@ public sealed class MediaPreparationWorker(IServiceScopeFactory scopes, ILogger<
     private async Task RunAsync(bool allowHistorical, CancellationTokenSource workers)
     {
         var cancellationToken = workers.Token;
+        var round = 0;
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -22,7 +23,9 @@ public sealed class MediaPreparationWorker(IServiceScopeFactory scopes, ILogger<
                 {
                     await using var scope = scopes.CreateAsyncScope();
                     var service = scope.ServiceProvider.GetRequiredService<MediaPreparationService>();
-                    if (!await service.PrepareNextAsync(allowHistorical, cancellationToken))
+                    var preferHistorical = allowHistorical && round == 0;
+                    round = (round + 1) % 3;
+                    if (!await service.PrepareNextAsync(allowHistorical, preferHistorical, cancellationToken))
                     {
                         await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
                     }

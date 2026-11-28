@@ -9,11 +9,13 @@ namespace ScrapBook.UnitTests.Services;
 public sealed class MediaAudioPreparationServiceTests
 {
     [Theory]
-    [InlineData(true, true, false)]
-    [InlineData(false, true, true)]
-    [InlineData(false, false, false)]
+    [InlineData(true, true, false, false)]
+    [InlineData(true, true, true, true)]
+    [InlineData(true, false, true, false)]
+    [InlineData(false, true, false, true)]
+    [InlineData(false, false, false, false)]
     public async Task GivesNewTranscodesPriorityAndHonorsHistoricalCapacityAsync(bool newWork, bool allowHistorical,
-        bool takesHistory)
+        bool preferHistorical, bool takesHistory)
     {
         using var cancellation = new CancellationTokenSource();
         var ordinary = Job();
@@ -21,12 +23,14 @@ public sealed class MediaAudioPreparationServiceTests
         var repository = new MediaAudioRepositoryStub { Job = newWork ? ordinary : null, HistoricalJob = historical };
         var service = Service(repository, new(), new());
 
-        Assert.Equal(newWork || takesHistory, await service.PrepareNextAsync(allowHistorical, cancellation.Token));
+        Assert.Equal(newWork || takesHistory, await service.PrepareNextAsync(allowHistorical, preferHistorical, cancellation.Token));
 
-        Assert.Equal((false, cancellation.Token), repository.EligibilityChecks[0]);
+        var historicalFirst = allowHistorical && preferHistorical;
+        Assert.Equal((historicalFirst, cancellation.Token), repository.EligibilityChecks[0]);
         if (takesHistory)
         {
-            Assert.Equal((true, cancellation.Token), repository.EligibilityChecks[1]);
+            if (historicalFirst) Assert.Single(repository.EligibilityChecks);
+            else Assert.Equal((true, cancellation.Token), repository.EligibilityChecks[1]);
             Assert.Equal(historical.Id, repository.Job!.Id);
         }
         else

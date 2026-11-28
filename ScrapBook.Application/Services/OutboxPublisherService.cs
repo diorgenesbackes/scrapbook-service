@@ -19,7 +19,7 @@ public sealed class OutboxPublisherService(IOutboxRepository repository, IOutbox
     public Task<IReadOnlyList<OutboxMessageEntity>> ClaimAsync(CancellationToken cancellationToken)
     {
         var now = clock.GetUtcNow();
-        return repository.ClaimAsync(FirstRecordConfirmedModel.Type, BatchSize, Guid.NewGuid(), now, now + Lease, cancellationToken);
+        return repository.ClaimAsync(FirstRecordConfirmedModel.Type, BatchSize, Guid.NewGuid(), now, now + Lease, null, cancellationToken);
     }
 
     public async Task<OutboxPublishResult> PublishAsync(OutboxMessageEntity row, CancellationToken cancellationToken)

@@ -11,5 +11,5 @@ public interface IMediaAdmissionRepository
     Task InsertDeliveryAsync(string consumer, string source, MediaConfirmationModel message, byte[] hash,
         DateTimeOffset now, CancellationToken cancellationToken);
     Task<bool> InsertJobAsync(MediaConfirmationModel message, int profileVersion, string kind, string profile,
-        string[] variantKinds, DateTimeOffset now, CancellationToken cancellationToken);
+        string[] variantKinds, bool isHistorical, DateTimeOffset now, CancellationToken cancellationToken);
 }

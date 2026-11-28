@@ -69,7 +69,7 @@ public sealed class OutboxRepository(ScrapBookDbContext context) : IOutboxReposi
         });
 
     public Task<IReadOnlyList<OutboxMessageEntity>> ClaimAsync(string type, int limit, Guid leaseToken,
-        DateTimeOffset now, DateTimeOffset leaseUntil, CancellationToken cancellationToken) =>
+        DateTimeOffset now, DateTimeOffset leaseUntil, DateTimeOffset? prioritizeSince, CancellationToken cancellationToken) =>
         ExecuteAsync<IReadOnlyList<OutboxMessageEntity>>(async () => await context.Database.SqlQuery<OutboxMessageEntity>($"""
             WITH eligible AS (
                 SELECT id
@@ -78,7 +78,7 @@ public sealed class OutboxRepository(ScrapBookDbContext context) : IOutboxReposi
                     AND state IN ('pending', 'publishing')
                     AND available_at <= {now}
                     AND (lease_until IS NULL OR lease_until <= {now})
-                ORDER BY available_at, id
+                ORDER BY CASE WHEN occurred_at >= CAST({prioritizeSince} AS timestamptz) THEN 0 ELSE 1 END, available_at, id
                 LIMIT {limit}
                 FOR UPDATE SKIP LOCKED
             )

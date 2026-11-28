@@ -48,13 +48,15 @@ public static class MediaPreparationRecoveryRunner
             }
             if (!enabled) return WriteCode("MEDIA_RECOVERY_DISABLED", 3);
 
+            var historyBefore = MediaHistoryOptions.ReadCutoff(builder.Configuration);
             if (mode == "history" && command is MediaRecoveryBatchCommand historical)
             {
-                command = historical with { HistoricalBefore = ReadHistoricalCutoff(builder.Configuration) };
+                command = historical with { HistoricalBefore = historyBefore
+                    ?? throw new StartupConfigurationException("MediaRecovery:HistoryBeforeUtc") };
             }
             var database = DatabaseOptions.ForMediaRecovery(builder.Configuration);
             builder.Services.AddDbContext<ScrapBookDbContext>(options => options.UseNpgsql(database.ConnectionString));
-            Register(builder.Services);
+            Register(builder.Services, historyBefore);
             if (mode == "cleanup") RegisterCleanup(builder);
             using var host = builder.Build();
             await using var scope = host.Services.CreateAsyncScope();
@@ -72,7 +74,7 @@ public static class MediaPreparationRecoveryRunner
         }
     }
 
-    private static void Register(IServiceCollection services)
+    private static void Register(IServiceCollection services, DateTimeOffset? historyBefore)
     {
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<MediaPreparationRepository>();
@@ -82,7 +84,10 @@ public static class MediaPreparationRecoveryRunner
         services.AddScoped<IMediaPreparationRecoveryRepository, MediaPreparationRecoveryRepository>();
         services.AddScoped<IMediaHistoryRepository, MediaHistoryRepository>();
         services.AddScoped<MediaRecoveryAccessService>();
-        services.AddScoped<MediaPreparationRecoveryService>();
+        services.AddScoped(provider => new MediaPreparationRecoveryService(provider.GetRequiredService<IMediaPreparationRecoveryRepository>(),
+            provider.GetRequiredService<IMediaAdmissionRepository>(), provider.GetRequiredService<IMediaRecoveryAccessRepository>(),
+            provider.GetRequiredService<MediaRecoveryAccessService>(), provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<MediaHistoryService>(), historyBefore));
         services.AddScoped<MediaHistoryService>();
     }
 
@@ -112,19 +117,6 @@ public static class MediaPreparationRecoveryRunner
             services.GetRequiredService<MediaRecoveryAccessService>(), services.GetRequiredService<IMediaRecoveryAccessRepository>(),
             services.GetRequiredService<IMediaCleanupRepository>(), services.GetRequiredService<IMediaCleanupStorage>(),
             services.GetRequiredService<TimeProvider>(), bucket));
-    }
-
-    private static DateTimeOffset ReadHistoricalCutoff(IConfiguration configuration)
-    {
-        const string key = "MediaRecovery:HistoryBeforeUtc";
-        var value = configuration[key];
-        if (value is null || !(value.EndsWith('Z') || value.EndsWith("+00:00", StringComparison.Ordinal))
-            || !DateTimeOffset.TryParseExact(value, "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK", CultureInfo.InvariantCulture,
-                DateTimeStyles.None, out var cutoff) || cutoff.Offset != TimeSpan.Zero || cutoff > TimeProvider.System.GetUtcNow())
-        {
-            throw new StartupConfigurationException(key);
-        }
-        return cutoff;
     }
 
     private static object? ReadCommand(string mode, string[] parameters, bool apply) => mode switch

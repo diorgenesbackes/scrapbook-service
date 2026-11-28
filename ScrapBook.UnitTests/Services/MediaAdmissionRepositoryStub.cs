@@ -9,6 +9,7 @@ internal sealed class MediaAdmissionRepositoryStub : IMediaAdmissionRepository
     public MediaSourceEntity? Source { get; set; } = MediaPreparationTestFixture.Source();
     public ProcessedMessageEntity? Delivery { get; set; }
     public Func<CancellationToken, Task>? BeforeCommitAsync { get; set; }
+    public bool? LastJobWasHistorical { get; private set; }
     public bool JobInserted { get; set; } = true;
     public List<EventWriteTestTransaction> Transactions { get; } = [];
     public List<(MediaConfirmationModel Message, bool Locked, CancellationToken Token)> SourceReads { get; } = [];
@@ -47,9 +48,10 @@ internal sealed class MediaAdmissionRepositoryStub : IMediaAdmissionRepository
     }
 
     public Task<bool> InsertJobAsync(MediaConfirmationModel message, int profileVersion, string kind, string profile,
-        string[] variantKinds, DateTimeOffset now, CancellationToken cancellationToken)
+        string[] variantKinds, bool isHistorical, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        LastJobWasHistorical = isHistorical;
         Jobs.Add((message, profileVersion, kind, variantKinds, now, cancellationToken));
         return Task.FromResult(JobInserted);
     }

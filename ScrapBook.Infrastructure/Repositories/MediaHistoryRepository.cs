@@ -19,15 +19,20 @@ public sealed class MediaHistoryRepository(MediaPreparationRepository repository
             LIMIT {limit}
             """, cancellationToken);
 
-    public Task<MediaHistoryCandidateModel?> FindByMessageIdAsync(long eventId, Guid messageId, CancellationToken cancellationToken) =>
-        repository.QueryAsync<MediaHistoryCandidateModel>($"""
+    public async Task<MediaHistoryCandidateModel?> FindByMessageIdAsync(long eventId, Guid messageId,
+        CancellationToken cancellationToken)
+    {
+        var candidates = await repository.QueryListAsync<MediaHistoryCandidateModel>($"""
             SELECT r.id AS "RecordId", f.id AS "FileId"
             FROM scrapbook.processing_jobs AS j
             JOIN scrapbook.files AS f ON f.id = j.processing_jobs_files_id AND f.profile_version = j.profile_version
             JOIN scrapbook.records AS r ON r.id = f.files_records_id
             WHERE r.records_events_id = {eventId} AND j.confirmation_message_id = {messageId}
                 AND j.kind = CASE WHEN f.kind = 'photo' THEN 'photo_prepare' ELSE 'av_transcode' END
+            LIMIT 2
             """, cancellationToken);
+        return candidates is [var candidate] ? candidate : null;
+    }
 
     public Task<MediaSourceEntity?> FindSourceAsync(long eventId, long recordId, long fileId, bool lockFile,
         CancellationToken cancellationToken) =>

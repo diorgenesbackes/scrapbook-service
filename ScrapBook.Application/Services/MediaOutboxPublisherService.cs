@@ -8,7 +8,8 @@ using static ScrapBook.Application.Services.MediaConfirmationService;
 namespace ScrapBook.Application.Services;
 
 public sealed class MediaOutboxPublisherService(IOutboxRepository outbox, IOutboxPublisher publisher,
-    IMediaAdmissionRepository admission, IMediaPreparationRepository preparation, TimeProvider clock)
+    IMediaAdmissionRepository admission, IMediaPreparationRepository preparation, TimeProvider clock,
+    DateTimeOffset? historicalBefore = null)
 {
     private const int MaximumAttempts = 5;
     private const string InvalidFact = "MEDIA_PUBLISH_INVALID_FACT";
@@ -19,7 +20,7 @@ public sealed class MediaOutboxPublisherService(IOutboxRepository outbox, IOutbo
     public Task<IReadOnlyList<OutboxMessageEntity>> ClaimAsync(CancellationToken cancellationToken)
     {
         var now = clock.GetUtcNow();
-        return outbox.ClaimAsync(MediaConfirmationModel.Type, 4, Guid.NewGuid(), now, now + Lease, cancellationToken);
+        return outbox.ClaimAsync(MediaConfirmationModel.Type, 4, Guid.NewGuid(), now, now + Lease, historicalBefore, cancellationToken);
     }
 
     public async Task<MediaOutboxPublishResult> PublishAsync(OutboxMessageEntity row, CancellationToken cancellationToken)
