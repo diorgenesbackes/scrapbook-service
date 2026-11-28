@@ -237,7 +237,7 @@ public sealed class MediaPreparationRepository(ScrapBookDbContext context) : IMe
     {
         var rows = await ExecuteAsync(() => context.Database.SqlQuery<MediaFileProjectionEntity>($"""
             SELECT f.id AS "FileId", f.processing_state AS "State", f.profile_version AS "ProfileVersion",
-                COALESCE(ready.variants, '[]'::jsonb)::text AS "Variants"
+                f.kind AS "Kind", COALESCE(ready.variants, '[]'::jsonb)::text AS "Variants"
             FROM scrapbook.files AS f
             JOIN scrapbook.records AS r ON r.id = f.files_records_id
             LEFT JOIN LATERAL (
@@ -253,13 +253,15 @@ public sealed class MediaPreparationRepository(ScrapBookDbContext context) : IMe
                     AND j.profile_version = v.profile_version AND j.state = 'completed'
                 WHERE f.processing_state = 'available' AND v.file_variants_files_id = f.id
                     AND v.profile_version = f.profile_version AND v.state = 'ready'
+                    AND v.media_type IS NOT NULL AND nullif(btrim(o.version_id), '') IS NOT NULL AND o.version_id <> 'null'
+                    AND (f.kind = 'photo' AND v.kind IN ('image', 'thumbnail') OR f.kind <> 'photo' AND v.kind = 'playback')
             ) AS ready ON TRUE
             WHERE r.records_events_id = {eventId} AND r.id = {recordId} AND f.id = {fileId}
                 AND r.confirmed_at IS NOT NULL AND f.validation_state = 'valid' AND f.confirmed_at IS NOT NULL
             """).ToListAsync(cancellationToken));
         var row = rows.SingleOrDefault();
         return row is null ? null : new(row.FileId, row.State, row.ProfileVersion,
-            JsonSerializer.Deserialize<MediaVariantReferenceModel[]>(row.Variants) ?? []);
+            JsonSerializer.Deserialize<MediaVariantReferenceModel[]>(row.Variants) ?? [], row.Kind);
     }
 
     internal Task<T?> QueryAsync<T>(FormattableString sql, CancellationToken cancellationToken) =>
