@@ -31,7 +31,9 @@ public static class MediaPreparationRecoveryRunner
         deadline.CancelAfter(TimeSpan.FromMinutes(2));
         try
         {
-            var builder = Host.CreateApplicationBuilder();
+            var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
+            builder.Configuration.AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
+            builder.Configuration.AddEnvironmentVariables();
             builder.Logging.ClearProviders();
             if (!bool.TryParse(builder.Configuration["MediaRecovery:Enabled"] ?? "false", out var enabled))
             {
