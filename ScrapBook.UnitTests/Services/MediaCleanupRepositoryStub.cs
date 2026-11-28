@@ -11,7 +11,8 @@ internal sealed class MediaCleanupRepositoryStub : IMediaCleanupRepository
     public List<EventWriteTestTransaction> Transactions { get; } = [];
     public List<(long EventId, long AfterId, int Limit, DateTimeOffset Cutoff, CancellationToken Token)> Pages { get; } = [];
     public List<(long EventId, MediaCleanupObjectModel Candidate, string VersionId, Guid Lease, DateTimeOffset Cutoff, DateTimeOffset Now,
-        CancellationToken Token)> Claims { get; } = [];
+        CancellationToken Token)> Claims
+    { get; } = [];
     public List<(long ObjectId, long Version, Guid Lease, DateTimeOffset Now, CancellationToken Token)> Completions { get; } = [];
 
     public Task<IReadOnlyList<MediaCleanupObjectModel>> FindCandidatesAsync(long eventId, long afterId, int limit,

@@ -129,7 +129,11 @@ public sealed class MediaPreparationRecoveryServiceTests
     {
         repository.Job = SetFailedJob() with
         {
-            State = state, RetryCycle = cycle, HasLease = lease, HasActiveAttempt = activeAttempt, LastAttemptNumber = lastAttempt
+            State = state,
+            RetryCycle = cycle,
+            HasLease = lease,
+            HasActiveAttempt = activeAttempt,
+            LastAttemptNumber = lastAttempt
         };
         var expected = cycle == int.MaxValue ? cycle : ReopenRequest.ExpectedCycle;
 

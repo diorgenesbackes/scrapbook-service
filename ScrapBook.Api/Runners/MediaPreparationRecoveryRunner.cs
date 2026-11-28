@@ -51,8 +51,11 @@ public static class MediaPreparationRecoveryRunner
             var historyBefore = MediaHistoryOptions.ReadCutoff(builder.Configuration);
             if (mode == "history" && command is MediaRecoveryBatchCommand historical)
             {
-                command = historical with { HistoricalBefore = historyBefore
-                    ?? throw new StartupConfigurationException("MediaRecovery:HistoryBeforeUtc") };
+                command = historical with
+                {
+                    HistoricalBefore = historyBefore
+                    ?? throw new StartupConfigurationException("MediaRecovery:HistoryBeforeUtc")
+                };
             }
             var database = DatabaseOptions.ForMediaRecovery(builder.Configuration);
             builder.Services.AddDbContext<ScrapBookDbContext>(options => options.UseNpgsql(database.ConnectionString));
