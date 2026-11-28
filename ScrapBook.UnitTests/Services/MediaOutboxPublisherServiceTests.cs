@@ -29,6 +29,16 @@ public sealed class MediaOutboxPublisherServiceTests
     }
 
     [Fact]
+    public async Task PrioritizesConfirmationsFromTheSharedActivationCutoffAsync()
+    {
+        var service = new MediaOutboxPublisherService(outbox, publisher, admission, preparation, clock, clock.Now);
+
+        await service.ClaimAsync(CancellationToken.None);
+
+        Assert.Equal(clock.Now, outbox.PrioritizeSince);
+    }
+
+    [Fact]
     public async Task PublishesTheSameCorrelationAcrossARetryAndUsesTheCurrentLeaseAsync()
     {
         var item = Claimed();

@@ -12,7 +12,7 @@ public interface IOutboxRepository
     Task ReopenAsync(Guid messageId, DateTimeOffset now, CancellationToken cancellationToken);
     Task<OutboxBacklogModel> GetBacklogAsync(string type, CancellationToken cancellationToken);
     Task<IReadOnlyList<OutboxMessageEntity>> ClaimAsync(string type, int limit, Guid leaseToken,
-        DateTimeOffset now, DateTimeOffset leaseUntil, CancellationToken cancellationToken);
+        DateTimeOffset now, DateTimeOffset leaseUntil, DateTimeOffset? prioritizeSince, CancellationToken cancellationToken);
     Task<bool> MarkPublishedAsync(Guid messageId, Guid leaseToken, DateTimeOffset now, CancellationToken cancellationToken);
     Task<bool> MarkFailedAsync(Guid messageId, Guid leaseToken, bool terminal, string errorCode, DateTimeOffset now,
         DateTimeOffset availableAt, CancellationToken cancellationToken);

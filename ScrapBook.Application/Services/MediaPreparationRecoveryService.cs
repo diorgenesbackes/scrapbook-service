@@ -8,7 +8,7 @@ using static ScrapBook.Application.Services.MediaConfirmationService;
 namespace ScrapBook.Application.Services;
 
 public sealed class MediaPreparationRecoveryService(IMediaPreparationRecoveryRepository recovery, IMediaAdmissionRepository admission,
-    IMediaRecoveryAccessRepository audit, MediaRecoveryAccessService access, TimeProvider clock, MediaHistoryService history)
+    IMediaRecoveryAccessRepository audit, MediaRecoveryAccessService access, TimeProvider clock, MediaHistoryService history, DateTimeOffset? historicalBefore = null)
 {
     public static bool IsValid(MediaReopenCommand command) =>
         command.EventId > 0 && command.FileId > 0 && command.ProfileVersion > 0 && command.ExpectedCycle > 0
@@ -140,7 +140,8 @@ public sealed class MediaPreparationRecoveryService(IMediaPreparationRecoveryRep
         }
         if (!command.Apply) return new("MEDIA_REDRIVE_ADMISSION_PREVIEW", true);
 
-        return await MediaAdmissionService.PersistAsync(admission, message, original, hash, now, cancellationToken)
+        return await MediaAdmissionService.PersistAsync(admission, message, original, hash,
+            message.ConfirmedAt < historicalBefore, now, cancellationToken)
             ? new("MEDIA_REDRIVE_ADMITTED", true)
             : new("MEDIA_REDRIVE_EFFECT_UNPROVEN", false);
     }

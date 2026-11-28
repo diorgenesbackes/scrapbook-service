@@ -210,14 +210,15 @@ if (mediaProcessing.Enabled)
     builder.Services.AddScoped<MediaPreparationRepository>();
     builder.Services.AddScoped<IMediaAdmissionRepository>(services => services.GetRequiredService<MediaPreparationRepository>());
     builder.Services.AddScoped<IMediaPreparationRepository>(services => services.GetRequiredService<MediaPreparationRepository>());
-    builder.Services.AddScoped<MediaAdmissionService>();
+    builder.Services.AddScoped(services => new MediaAdmissionService(services.GetRequiredService<IMediaAdmissionRepository>(),
+        services.GetRequiredService<IOutboxRepository>(), services.GetRequiredService<TimeProvider>(), mediaProcessing.HistoricalBefore));
     builder.Services.AddScoped<MediaPreparationService>();
     builder.Services.AddScoped<MediaOutboxPublisherService>(services => new MediaOutboxPublisherService(
         services.GetRequiredService<IOutboxRepository>(),
         services.GetRequiredKeyedService<IOutboxPublisher>(MediaProcessingOptions.SectionName),
         services.GetRequiredService<IMediaAdmissionRepository>(),
         services.GetRequiredService<IMediaPreparationRepository>(),
-        services.GetRequiredService<TimeProvider>()));
+        services.GetRequiredService<TimeProvider>(), mediaProcessing.HistoricalBefore));
     builder.Services.AddKeyedSingleton<IAmazonSimpleNotificationService>(MediaProcessingOptions.SectionName, (_, _) =>
         new AmazonSimpleNotificationServiceClient(MessagingConfiguration(new AmazonSimpleNotificationServiceConfig(),
             mediaProcessing.Region, mediaProcessing.SnsServiceUrl)));

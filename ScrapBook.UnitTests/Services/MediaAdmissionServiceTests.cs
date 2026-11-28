@@ -36,6 +36,18 @@ public sealed class MediaAdmissionServiceTests
     }
 
     [Theory]
+    [InlineData(-1, false)]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    public async Task ClassifiesNormalDeliveriesAgainstTheSharedActivationCutoffAsync(int cutoffOffsetSeconds, bool historical)
+    {
+        var service = new MediaAdmissionService(repository, outbox, clock, Confirmation.ConfirmedAt.AddSeconds(cutoffOffsetSeconds));
+
+        Assert.Equal(MediaAdmissionResult.Admitted, await service.AdmitAsync(Envelope, CancellationToken.None));
+        Assert.Equal(historical, repository.LastJobWasHistorical);
+    }
+
+    [Theory]
     [InlineData("audio")]
     [InlineData("video")]
     public async Task PersistsAudioAndVideoAsPendingTranscodeWorkAsync(string kind)

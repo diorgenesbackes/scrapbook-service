@@ -43,9 +43,12 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
     public Task<bool> PrepareNextAsync(CancellationToken cancellationToken) =>
         PrepareNextAsync(true, cancellationToken);
 
-    public async Task<bool> PrepareNextAsync(bool allowHistorical, CancellationToken cancellationToken)
+    public Task<bool> PrepareNextAsync(bool allowHistorical, CancellationToken cancellationToken) =>
+        PrepareNextAsync(allowHistorical, false, cancellationToken);
+
+    public async Task<bool> PrepareNextAsync(bool allowHistorical, bool preferHistorical, CancellationToken cancellationToken)
     {
-        var claim = await ClaimAsync(allowHistorical, cancellationToken);
+        var claim = await ClaimAsync(allowHistorical, preferHistorical, cancellationToken);
         if (claim.Work is { } work)
         {
             await PrepareAsync(work, cancellationToken);
@@ -53,15 +56,16 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
         return claim.Found;
     }
 
-    private async Task<(bool Found, PhotoPreparationWorkModel? Work)> ClaimAsync(bool allowHistorical,
+    private async Task<(bool Found, PhotoPreparationWorkModel? Work)> ClaimAsync(bool allowHistorical, bool preferHistorical,
         CancellationToken cancellationToken)
     {
         await using var transaction = await repository.BeginAsync(cancellationToken);
         var now = clock.GetUtcNow();
-        var job = await repository.FindEligiblePhotoAsync(now, false, cancellationToken);
+        var historicalFirst = allowHistorical && preferHistorical;
+        var job = await repository.FindEligiblePhotoAsync(now, historicalFirst, cancellationToken);
         if (job is null && allowHistorical)
         {
-            job = await repository.FindEligiblePhotoAsync(now, true, cancellationToken);
+            job = await repository.FindEligiblePhotoAsync(now, !historicalFirst, cancellationToken);
         }
         if (job is null) return (false, null);
 

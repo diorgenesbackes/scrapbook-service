@@ -7,6 +7,7 @@ namespace ScrapBook.UnitTests.Services;
 internal sealed class OutboxTestRepository : IOutboxRepository
 {
     public OutboxMessageEntity? Origin { get; set; }
+    public DateTimeOffset? PrioritizeSince { get; private set; }
     public Guid? CurrentLease { get; set; }
     public DateTimeOffset? CurrentLeaseExpiresAt { get; set; }
     public Action<StructuralLockOutboxEntity, CancellationToken>? BeforeResult { get; set; }
@@ -62,8 +63,9 @@ internal sealed class OutboxTestRepository : IOutboxRepository
     }
 
     public Task<IReadOnlyList<OutboxMessageEntity>> ClaimAsync(string type, int limit, Guid leaseToken, DateTimeOffset now,
-        DateTimeOffset leaseUntil, CancellationToken cancellationToken)
+        DateTimeOffset leaseUntil, DateTimeOffset? prioritizeSince, CancellationToken cancellationToken)
     {
+        PrioritizeSince = prioritizeSince;
         Claims.Add((type, limit, leaseToken, now, leaseUntil, cancellationToken));
         return Task.FromResult<IReadOnlyList<OutboxMessageEntity>>([]);
     }
