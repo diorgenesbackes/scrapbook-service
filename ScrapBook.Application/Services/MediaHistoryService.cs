@@ -16,7 +16,8 @@ public sealed class MediaHistoryService(IMediaHistoryRepository repository, IMed
     public async Task<MediaRecoveryBatchResult> ScanAsync(MediaRecoveryBatchCommand command, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!MediaRecoveryAccessService.IsValid(command))
+        if (!MediaRecoveryAccessService.IsValid(command) || command.HistoricalBefore is not { } cutoff
+            || cutoff.Offset != TimeSpan.Zero || cutoff > clock.GetUtcNow())
         {
             return new("MEDIA_RECOVERY_INVALID_ARGUMENT", command.AfterId, 0, 0, 0, 0);
         }
@@ -25,7 +26,7 @@ public sealed class MediaHistoryService(IMediaHistoryRepository repository, IMed
             return new("MEDIA_RECOVERY_FORBIDDEN", command.AfterId, 0, 0, 0, 0);
         }
 
-        var files = await repository.FindPageAsync(command.EventId, command.AfterId, command.Limit, cancellationToken);
+        var files = await repository.FindPageAsync(command.EventId, command.AfterId, command.Limit, cutoff, cancellationToken);
         var changed = 0;
         var rejected = 0;
         var deferred = 0;
@@ -56,6 +57,11 @@ public sealed class MediaHistoryService(IMediaHistoryRepository repository, IMed
         if (confirmation is null) return await RejectAsync(evidence);
         if (!MatchesSource(confirmation, source)) return await RejectAsync("MEDIA_HISTORY_SOURCE_UNVERIFIED");
 
+        if (confirmation.ConfirmedAt >= command.HistoricalBefore)
+        {
+            return MediaHistoryFileResult.AlreadyAdmitted;
+        }
+
         correlationId = confirmation.CorrelationId;
         var photo = source.Kind == "photo";
         var kind = photo ? "photo_prepare" : "av_transcode";
@@ -66,10 +72,17 @@ public sealed class MediaHistoryService(IMediaHistoryRepository repository, IMed
         {
             if (work.MessageId is null) return await RejectAsync("MEDIA_HISTORY_LEGACY_JOB_UNVERIFIED");
             if (work.MessageId == messageId && work.CorrelationId == confirmation.CorrelationId
-                && work.ConfirmedAt == MediaConfirmationCodec.MicrosecondPrecision(confirmation.ConfirmedAt)
-                && MatchesDelivery(delivery, hash))
+                && work.ConfirmedAt == MediaConfirmationCodec.MicrosecondPrecision(confirmation.ConfirmedAt))
             {
-                return MediaHistoryFileResult.AlreadyAdmitted;
+                if (delivery is not null)
+                    return MatchesDelivery(delivery, hash) ? MediaHistoryFileResult.AlreadyAdmitted
+                        : await RejectAsync("MEDIA_HISTORY_JOB_IDENTITY_CONFLICT");
+                if (transaction is null) return MediaHistoryFileResult.Simulated;
+
+                await admission.InsertDeliveryAsync(Consumer, Source, confirmation, hash, clock.GetUtcNow(), cancellationToken);
+                await AuditAsync(command, actor, file.FileId, correlationId, "success", "MEDIA_HISTORY_PROTECTION_RESTORED", cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return MediaHistoryFileResult.Admitted;
             }
             return await RejectAsync("MEDIA_HISTORY_JOB_IDENTITY_CONFLICT");
         }
