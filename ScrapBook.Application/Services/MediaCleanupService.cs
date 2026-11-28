@@ -12,14 +12,19 @@ public sealed class MediaCleanupService(MediaRecoveryAccessService access, IMedi
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!MediaRecoveryAccessService.IsValid(command)) return new("MEDIA_RECOVERY_INVALID_ARGUMENT", command.AfterId, 0, 0, 0, 0);
+        if (!MediaRecoveryAccessService.IsValid(command) || command.CleanupObjectId is <= 0) return new("MEDIA_RECOVERY_INVALID_ARGUMENT", command.AfterId, 0, 0, 0, 0);
         var principal = await access.FindOperatorAsync(cancellationToken);
         if (principal is null) return new("MEDIA_RECOVERY_FORBIDDEN", command.AfterId, 0, 0, 0, 0);
 
         var now = clock.GetUtcNow();
         var cutoff = now.AddHours(-24);
-        var candidates = await repository.FindCandidatesAsync(command.EventId, command.AfterId, command.Limit,
-            cutoff, cancellationToken);
+        var candidates = await repository.FindCandidatesAsync(command.EventId,
+            command.CleanupObjectId is { } objectId ? objectId - 1 : command.AfterId,
+            command.CleanupObjectId is null ? command.Limit : 1, cutoff, cancellationToken);
+        if (command.CleanupObjectId is { } target && (candidates.Count != 1 || candidates[0].Id != target))
+        {
+            return new("OK", command.AfterId, 0, 0, 0, 0);
+        }
         var changed = 0;
         var rejected = 0;
         var deferred = 0;

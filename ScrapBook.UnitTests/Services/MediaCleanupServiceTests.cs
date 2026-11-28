@@ -68,6 +68,34 @@ public sealed class MediaCleanupServiceTests
         Assert.Empty(repository.Transactions);
     }
 
+    [Fact]
+    public async Task DoesNotClaimTheNextObjectWhenTheExplicitSelectionIsIneligibleAsync()
+    {
+        var selected = Photo();
+        repository.Candidates = [selected with { Id = selected.Id + 1 }];
+
+        var result = await Service.ScanAsync(Command with { Apply = true, CleanupObjectId = selected.Id }, CancellationToken.None);
+
+        Assert.Equal(new MediaRecoveryBatchResult("OK", Command.AfterId, 0, 0, 0, 0), result);
+        Assert.Equal((Command.EventId, selected.Id - 1, 1, clock.Now.AddHours(-24), CancellationToken.None),
+            Assert.Single(repository.Pages));
+        Assert.Empty(repository.Claims);
+        Assert.Empty(storage.Deletions);
+    }
+
+    [Fact]
+    public async Task ClaimsOnlyTheExplicitlySelectedObjectAsync()
+    {
+        var selected = Photo();
+        repository.Candidates = [selected];
+
+        var result = await Service.ScanAsync(Command with { Apply = true, CleanupObjectId = selected.Id }, CancellationToken.None);
+
+        Assert.Equal(new MediaRecoveryBatchResult("OK", selected.Id, 1, 1, 0, 0), result);
+        Assert.Equal(selected, Assert.Single(repository.Claims).Candidate);
+        Assert.Equal(selected.ObjectKey, Assert.Single(storage.Deletions).Key);
+    }
+
     [Theory]
     [InlineData("photo", "failed", false)]
     [InlineData("audio", "failed", false)]
