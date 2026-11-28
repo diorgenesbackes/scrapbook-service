@@ -4,5 +4,5 @@ namespace ScrapBook.Domain.Interfaces;
 
 public interface IMediaProcessingMonitoringRepository
 {
-    Task<IReadOnlyList<MediaProcessingBacklogModel>> GetProcessingBacklogAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<MediaProcessingBacklogModel>> GetProcessingBacklogAsync(DateTimeOffset sampledAt, CancellationToken cancellationToken);
 }

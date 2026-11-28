@@ -8,6 +8,6 @@ public sealed class MediaProcessingMonitoringService(IOutboxRepository outbox, I
     public Task<OutboxBacklogModel> ReadBacklogAsync(CancellationToken cancellationToken) =>
         outbox.GetBacklogAsync(MediaConfirmationModel.Type, cancellationToken);
 
-    public Task<IReadOnlyList<MediaProcessingBacklogModel>> ReadProcessingBacklogAsync(CancellationToken cancellationToken) =>
-        processing.GetProcessingBacklogAsync(cancellationToken);
+    public Task<IReadOnlyList<MediaProcessingBacklogModel>> ReadProcessingBacklogAsync(DateTimeOffset sampledAt,
+        CancellationToken cancellationToken) => processing.GetProcessingBacklogAsync(sampledAt, cancellationToken);
 }

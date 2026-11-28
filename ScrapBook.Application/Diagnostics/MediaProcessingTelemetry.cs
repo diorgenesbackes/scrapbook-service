@@ -99,7 +99,7 @@ public sealed class MediaProcessingTelemetry
         };
         OldestJob.Record(oldestSeconds, tags);
         RecordJobCount(backlog.PendingCount, "pending", tags);
-        RecordJobCount(backlog.ActiveCount, "running", tags);
+        RecordJobCount(backlog.ActiveCount, "active", tags);
         RecordJobCount(backlog.ReconcilingCount, "reconciling", tags);
     }
 
