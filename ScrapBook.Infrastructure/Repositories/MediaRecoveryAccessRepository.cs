@@ -25,14 +25,16 @@ public sealed class MediaRecoveryAccessRepository(MediaPreparationRepository rep
             databasePrincipal = audit.Operator,
             incident = audit.Incident,
             correctiveRevision = audit.Revision,
-            cycle = audit.Cycle
+            cycle = audit.Cycle,
+            messageId = audit.MessageId,
+            requestedEventId = audit.EventId
         });
         return repository.RequireWriteAsync($"""
             INSERT INTO scrapbook.audit_entries (
                 audit_entries_events_id, actor_type, action, subject_type, subject_id, outcome,
                 reason_code, correlation_id, after_state, expires_at, area
             )
-            VALUES ({audit.EventId}, 'system', {audit.Action}, 'file', {audit.FileId}, {audit.Outcome},
+            VALUES ((SELECT id FROM scrapbook.events WHERE id = {audit.EventId}), 'system', {audit.Action}, 'file', {audit.FileId}, {audit.Outcome},
                 {audit.ReasonCode}, {audit.CorrelationId}, CAST({data} AS jsonb), CURRENT_TIMESTAMP + INTERVAL '4320 hours', 'records')
             """, cancellationToken);
     }

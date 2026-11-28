@@ -38,21 +38,30 @@ public sealed class MediaAdmissionService(IMediaAdmissionRepository repository, 
             return DuplicateResult(existing, hash);
         }
         var now = clock.GetUtcNow();
-        if (original!.ProcessingState != "pending" || now - message.ConfirmedAt > TimeSpan.FromDays(30))
+        if (original!.ProcessingState != "pending" || now - message.ConfirmedAt > ReplayHorizon)
         {
             return MediaAdmissionResult.Quarantined;
         }
 
-        var photo = original.Kind == "photo";
-        var inserted = await repository.InsertJobAsync(message, original.ProfileVersion, photo ? "photo_prepare" : "av_transcode",
-            photo ? JsonSerializer.Serialize(PhotoProfile) : "{}", photo ? PhotoKinds : ["playback"], now, cancellationToken);
-        if (!inserted)
+        if (!await PersistAsync(repository, message, original, hash, now, cancellationToken))
         {
             return MediaAdmissionResult.Quarantined;
         }
-        await repository.InsertDeliveryAsync(Consumer, Source, message, hash, now, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return MediaAdmissionResult.Admitted;
+    }
+
+    internal static async Task<bool> PersistAsync(IMediaAdmissionRepository repository, MediaConfirmationModel message,
+        MediaSourceEntity original, byte[] hash, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var photo = original.Kind == "photo";
+        var inserted = await repository.InsertJobAsync(message, original.ProfileVersion, photo ? "photo_prepare" : "av_transcode",
+            photo ? JsonSerializer.Serialize(PhotoProfile) : "{}", photo ? PhotoKinds : ["playback"], now, cancellationToken);
+        if (inserted)
+        {
+            await repository.InsertDeliveryAsync(Consumer, Source, message, hash, now, cancellationToken);
+        }
+        return inserted;
     }
 
     private static MediaAdmissionResult DuplicateResult(ProcessedMessageEntity delivery, byte[] hash) =>

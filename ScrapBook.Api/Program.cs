@@ -51,25 +51,12 @@ if (args is [ProcessPhotoVariantProcessor.Argument, var photoLength, var imageSi
 
 if (args is [EventStructuralLockRecoveryRunner.Argument, .. var recoveryArguments])
 {
-    using var cancellation = new CancellationTokenSource();
-    ConsoleCancelEventHandler cancel = (_, eventArgs) =>
-    {
-        eventArgs.Cancel = true;
-        cancellation.Cancel();
-    };
-    Console.CancelKeyPress += cancel;
-    try
-    {
-        return await EventStructuralLockRecoveryRunner.RunAsync(recoveryArguments, cancellation.Token);
-    }
-    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-    {
-        return 130;
-    }
-    finally
-    {
-        Console.CancelKeyPress -= cancel;
-    }
+    return await RunOperationalModeAsync(token => EventStructuralLockRecoveryRunner.RunAsync(recoveryArguments, token));
+}
+
+if (args is [MediaPreparationRecoveryRunner.Argument, .. var mediaRecoveryArguments])
+{
+    return await RunOperationalModeAsync(token => MediaPreparationRecoveryRunner.RunAsync(mediaRecoveryArguments, token));
 }
 
 var builder = WebApplication.CreateBuilder(args);
@@ -309,6 +296,29 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 
 await app.RunAsync();
 return 0;
+
+static async Task<int> RunOperationalModeAsync(Func<CancellationToken, Task<int>> run)
+{
+    using var cancellation = new CancellationTokenSource();
+    ConsoleCancelEventHandler cancel = (_, eventArgs) =>
+    {
+        eventArgs.Cancel = true;
+        cancellation.Cancel();
+    };
+    Console.CancelKeyPress += cancel;
+    try
+    {
+        return await run(cancellation.Token);
+    }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+        return 130;
+    }
+    finally
+    {
+        Console.CancelKeyPress -= cancel;
+    }
+}
 
 AmazonS3Config StorageConfiguration(string? serviceUrl)
 {
