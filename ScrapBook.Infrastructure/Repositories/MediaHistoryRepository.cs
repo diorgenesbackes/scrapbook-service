@@ -7,12 +7,14 @@ namespace ScrapBook.Infrastructure.Repositories;
 public sealed class MediaHistoryRepository(MediaPreparationRepository repository) : IMediaHistoryRepository
 {
     public async Task<IReadOnlyList<MediaHistoryCandidateModel>> FindPageAsync(long eventId, long afterId, int limit,
+        DateTimeOffset historicalBefore,
         CancellationToken cancellationToken) =>
         await repository.QueryListAsync<MediaHistoryCandidateModel>($"""
             SELECT r.id AS "RecordId", f.id AS "FileId"
             FROM scrapbook.records AS r
             JOIN scrapbook.files AS f ON f.files_records_id = r.id
-            WHERE r.records_events_id = {eventId} AND r.confirmed_at IS NOT NULL AND f.id > {afterId}
+            WHERE r.records_events_id = {eventId} AND r.confirmed_at AT TIME ZONE 'America/Sao_Paulo' < {historicalBefore}
+                AND f.id > {afterId}
             ORDER BY f.id
             LIMIT {limit}
             """, cancellationToken);
