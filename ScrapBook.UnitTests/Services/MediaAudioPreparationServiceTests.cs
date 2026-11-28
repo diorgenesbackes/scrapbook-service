@@ -9,6 +9,39 @@ namespace ScrapBook.UnitTests.Services;
 public sealed class MediaAudioPreparationServiceTests
 {
     [Theory]
+    [InlineData(true, true, false, false)]
+    [InlineData(true, true, true, true)]
+    [InlineData(true, false, true, false)]
+    [InlineData(false, true, false, true)]
+    [InlineData(false, false, false, false)]
+    public async Task GivesNewTranscodesPriorityAndHonorsHistoricalCapacityAsync(bool newWork, bool allowHistorical,
+        bool preferHistorical, bool takesHistory)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var ordinary = Job();
+        var historical = ordinary with { Id = ordinary.Id + 1 };
+        var repository = new MediaAudioRepositoryStub { Job = newWork ? ordinary : null, HistoricalJob = historical };
+        var service = Service(repository, new(), new());
+
+        Assert.Equal(newWork || takesHistory, await service.PrepareNextAsync(allowHistorical, preferHistorical, cancellation.Token));
+
+        var historicalFirst = allowHistorical && preferHistorical;
+        Assert.Equal((historicalFirst, cancellation.Token), repository.EligibilityChecks[0]);
+        if (takesHistory)
+        {
+            if (historicalFirst) Assert.Single(repository.EligibilityChecks);
+            else Assert.Equal((true, cancellation.Token), repository.EligibilityChecks[1]);
+            Assert.Equal(historical.Id, repository.Job!.Id);
+        }
+        else
+        {
+            Assert.Single(repository.EligibilityChecks);
+            if (newWork) Assert.Equal(ordinary.Id, repository.Job!.Id);
+            else Assert.Null(repository.Job);
+        }
+    }
+
+    [Theory]
     [InlineData(1, 96000)]
     [InlineData(2, 128000)]
     public async Task PersistsKeysVerifiedInputProfileAndClockBeforeTheProviderCallAsync(int channels, int bitrate)

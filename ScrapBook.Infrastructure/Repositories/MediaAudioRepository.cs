@@ -15,7 +15,7 @@ public sealed class MediaAudioRepository(MediaPreparationRepository repository, 
     public Task InsertFailureAsync(MediaFailureEntity result, CancellationToken cancellationToken) =>
         repository.InsertFailureAsync(result, cancellationToken);
 
-    public Task<MediaJobEntity?> FindEligibleAudioAsync(DateTimeOffset now, CancellationToken cancellationToken) =>
+    public Task<MediaJobEntity?> FindEligibleAudioAsync(DateTimeOffset now, bool historical, CancellationToken cancellationToken) =>
         repository.QueryAsync<MediaJobEntity>($"""
             SELECT j.id AS "Id", r.records_events_id AS "EventId", r.id AS "RecordId", f.id AS "FileId",
                 j.profile_version AS "ProfileVersion", j.version AS "Version", j.state AS "State",
@@ -35,6 +35,7 @@ public sealed class MediaAudioRepository(MediaPreparationRepository repository, 
             WHERE j.kind = 'av_transcode' AND (f.kind = 'audio' OR ({settings.VideoEnabled} AND f.kind = 'video'))
                 AND f.processing_state IN ('pending', 'processing')
                 AND j.state IN ('pending', 'running', 'reconciling') AND j.confirmed_at IS NOT NULL
+                AND j.is_historical = {historical}
                 AND j.next_attempt_at <= {now} AND (j.lease_until IS NULL OR j.lease_until <= {now})
             ORDER BY j.next_attempt_at, j.id
             LIMIT 1

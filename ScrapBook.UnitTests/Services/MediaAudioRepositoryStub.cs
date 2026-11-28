@@ -7,6 +7,8 @@ namespace ScrapBook.UnitTests.Services;
 internal sealed class MediaAudioRepositoryStub : IMediaAudioRepository
 {
     public MediaJobEntity? Job { get; set; } = MediaAudioTestFixture.Job();
+    public MediaJobEntity? HistoricalJob { get; set; }
+    public List<(bool Historical, CancellationToken Token)> EligibilityChecks { get; } = [];
     public MediaSourceEntity? Source { get; set; } = MediaPreparationTestFixture.Source() with { Kind = "audio" };
     public MediaAudioAttemptEntity? Attempt { get; set; }
     public DateTimeOffset? NextAt { get; private set; }
@@ -40,11 +42,13 @@ internal sealed class MediaAudioRepositoryStub : IMediaAudioRepository
         return Task.FromResult<IEventTransaction>(transaction);
     }
 
-    public Task<MediaJobEntity?> FindEligibleAudioAsync(DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<MediaJobEntity?> FindEligibleAudioAsync(DateTimeOffset now, bool historical, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(Job is { State: "pending" or "running" or "reconciling" } && (NextAt is null || now >= NextAt)
-            ? Job : null);
+        EligibilityChecks.Add((historical, cancellationToken));
+        var eligible = historical ? HistoricalJob : Job;
+        return Task.FromResult(eligible is { State: "pending" or "running" or "reconciling" } && (NextAt is null || now >= NextAt)
+            ? eligible : null);
     }
 
     public Task<MediaSourceEntity?> FindSourceAsync(MediaConfirmationModel message, bool lockFile, CancellationToken cancellationToken)

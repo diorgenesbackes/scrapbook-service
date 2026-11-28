@@ -1,7 +1,7 @@
 namespace ScrapBook.Api.Options;
 
 public sealed record MediaProcessingOptions(bool Enabled, string Region, string TopicArn, string QueueUrl,
-    string? SnsServiceUrl, string? SqsServiceUrl)
+    string? SnsServiceUrl, string? SqsServiceUrl, DateTimeOffset? HistoricalBefore = null)
 {
     public const string SectionName = "MediaProcessing";
 
@@ -18,7 +18,8 @@ public sealed record MediaProcessingOptions(bool Enabled, string Region, string 
         {
             throw new StartupConfigurationException(SectionName + ":QueueUrl");
         }
-        return new(options.Enabled, options.Region, options.TopicArn, options.QueueUrl, options.SnsServiceUrl, options.SqsServiceUrl);
+        return new(options.Enabled, options.Region, options.TopicArn, options.QueueUrl, options.SnsServiceUrl, options.SqsServiceUrl,
+            options.Enabled ? MediaHistoryOptions.ReadCutoff(configuration) : null);
     }
 
     internal static bool SameQueue(string firstUrl, string secondUrl)

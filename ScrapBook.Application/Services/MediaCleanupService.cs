@@ -1,0 +1,110 @@
+using ScrapBook.Domain.Commands;
+using ScrapBook.Domain.Exceptions;
+using ScrapBook.Domain.Interfaces;
+using ScrapBook.Domain.Models;
+
+namespace ScrapBook.Application.Services;
+
+public sealed class MediaCleanupService(MediaRecoveryAccessService access, IMediaRecoveryAccessRepository audit,
+    IMediaCleanupRepository repository, IMediaCleanupStorage storage, TimeProvider clock, string bucket)
+{
+    public async Task<MediaRecoveryBatchResult> ScanAsync(MediaRecoveryBatchCommand command,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!MediaRecoveryAccessService.IsValid(command) || command.CleanupObjectId is <= 0) return new("MEDIA_RECOVERY_INVALID_ARGUMENT", command.AfterId, 0, 0, 0, 0);
+        var principal = await access.FindOperatorAsync(cancellationToken);
+        if (principal is null) return new("MEDIA_RECOVERY_FORBIDDEN", command.AfterId, 0, 0, 0, 0);
+
+        var now = clock.GetUtcNow();
+        var cutoff = now.AddHours(-24);
+        var candidates = await repository.FindCandidatesAsync(command.EventId,
+            command.CleanupObjectId is { } objectId ? objectId - 1 : command.AfterId,
+            command.CleanupObjectId is null ? command.Limit : 1, cutoff, cancellationToken);
+        if (command.CleanupObjectId is { } target && (candidates.Count != 1 || candidates[0].Id != target))
+        {
+            return new("OK", command.AfterId, 0, 0, 0, 0);
+        }
+        var changed = 0;
+        var rejected = 0;
+        var deferred = 0;
+        foreach (var candidate in candidates)
+        {
+            var entry = new MediaRecoveryAuditModel(principal, command.EventId, candidate.FileId, "media.cleanup",
+                "success", "cleanup_claimed", command.Incident, command.Revision, candidate.RequestKey);
+            if (!IsEligible(candidate))
+            {
+                rejected++;
+                if (command.Apply) await audit.AuditAsync(entry with { Outcome = "rejected", ReasonCode = "artifact_scope_mismatch" }, cancellationToken);
+            }
+            else if (command.Apply)
+            {
+                if (await TryDeleteAsync(candidate, entry, cutoff, now, cancellationToken)) changed++;
+                else deferred++;
+            }
+        }
+
+        var next = candidates.Count == 0 ? command.AfterId : candidates[^1].Id;
+        return new("OK", next, candidates.Count, changed, rejected, deferred);
+    }
+
+    private async Task<bool> TryDeleteAsync(MediaCleanupObjectModel candidate, MediaRecoveryAuditModel entry,
+        DateTimeOffset cutoff, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(TimeSpan.FromMinutes(2));
+        try
+        {
+            var versionId = candidate.VersionId ?? await storage.FindExpiredVersionAsync(candidate.Bucket,
+                candidate.ObjectKey, cutoff, budget.Token);
+            if (string.IsNullOrWhiteSpace(versionId) || versionId == "null" || candidate.LastModified > cutoff)
+                return false;
+
+            var lease = Guid.NewGuid();
+            long? version;
+            await using (var transaction = await repository.BeginAsync(cancellationToken))
+            {
+                version = await repository.ClaimAsync(entry.EventId, candidate, versionId, lease, cutoff, now,
+                    cancellationToken);
+                if (version is null) return false;
+                await audit.AuditAsync(entry, cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+            }
+
+            await storage.DeleteVersionAsync(candidate.Bucket, candidate.ObjectKey, versionId, budget.Token);
+            await using var completion = await repository.BeginAsync(cancellationToken);
+            if (!await repository.CompleteAsync(candidate.Id, version.Value, lease, clock.GetUtcNow(), cancellationToken))
+                return false;
+            await audit.AuditAsync(entry with { ReasonCode = "expired_attempt_version_removed" }, cancellationToken);
+            await completion.CommitAsync(cancellationToken);
+            return true;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && budget.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (MediaVariantStorageException)
+        {
+            return false;
+        }
+    }
+
+    private bool IsEligible(MediaCleanupObjectModel candidate)
+    {
+        if (candidate.Bucket != bucket || candidate.RequestKey == Guid.Empty) return false;
+        var path = FormattableString.Invariant($"{candidate.FileId}/{candidate.RequestKey:N}/");
+        if (candidate.Provider == "local" && candidate.FileKind == "photo")
+        {
+            var prefix = "submissions/derived/" + path;
+            return candidate.AttemptState == "failed" && candidate.OutputPrefix == prefix
+                && (candidate.ObjectKey == prefix + "image.jpg" || candidate.ObjectKey == prefix + "thumbnail.jpg");
+        }
+
+        if (candidate.Provider != "mediaconvert" || candidate.FileKind is not ("audio" or "video")) return false;
+        var output = "submissions/transcode-output/" + path;
+        if (candidate.OutputPrefix != output) return false;
+        var playback = candidate.FileKind == "video" ? "playback.mp4" : "playback.m4a";
+        return candidate.ObjectKey == "submissions/transcode-input/" + path + "input"
+            || candidate.AttemptState == "failed" && candidate.ObjectKey == output + playback;
+    }
+}

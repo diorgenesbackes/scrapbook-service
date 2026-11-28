@@ -9,6 +9,7 @@ internal static class MediaConfirmationService
 {
     internal const string Consumer = "media-preparation";
     internal const string Source = "internal";
+    internal static readonly TimeSpan ReplayHorizon = TimeSpan.FromDays(30);
     internal static readonly PhotoPreparationProfileModel PhotoProfile = new(2048, 400, 85);
     internal static string[] PhotoKinds => ["image", "thumbnail"];
 

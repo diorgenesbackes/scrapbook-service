@@ -7,15 +7,17 @@ namespace ScrapBook.UnitTests.Services;
 internal sealed class OutboxTestRepository : IOutboxRepository
 {
     public OutboxMessageEntity? Origin { get; set; }
+    public DateTimeOffset? PrioritizeSince { get; private set; }
     public Guid? CurrentLease { get; set; }
     public DateTimeOffset? CurrentLeaseExpiresAt { get; set; }
     public Action<StructuralLockOutboxEntity, CancellationToken>? BeforeResult { get; set; }
     public EventWriteTestTransaction Transaction { get; private set; } = new();
     public List<(string Type, int Limit, Guid Lease, DateTimeOffset Now, DateTimeOffset Until, CancellationToken Token)> Claims
-        { get; } = [];
+    { get; } = [];
     public List<(Guid Id, Guid Lease, DateTimeOffset Now, CancellationToken Token)> Published { get; } = [];
     public List<(Guid Id, Guid Lease, bool Terminal, string ErrorCode, DateTimeOffset Now, DateTimeOffset AvailableAt,
-        CancellationToken Token)> Failures { get; } = [];
+        CancellationToken Token)> Failures
+    { get; } = [];
     public List<(StructuralLockOutboxEntity Message, CancellationToken Token)> Results { get; } = [];
     public List<(Guid Id, DateTimeOffset Now, CancellationToken Token)> Reopened { get; } = [];
 
@@ -62,8 +64,9 @@ internal sealed class OutboxTestRepository : IOutboxRepository
     }
 
     public Task<IReadOnlyList<OutboxMessageEntity>> ClaimAsync(string type, int limit, Guid leaseToken, DateTimeOffset now,
-        DateTimeOffset leaseUntil, CancellationToken cancellationToken)
+        DateTimeOffset leaseUntil, DateTimeOffset? prioritizeSince, CancellationToken cancellationToken)
     {
+        PrioritizeSince = prioritizeSince;
         Claims.Add((type, limit, leaseToken, now, leaseUntil, cancellationToken));
         return Task.FromResult<IReadOnlyList<OutboxMessageEntity>>([]);
     }
