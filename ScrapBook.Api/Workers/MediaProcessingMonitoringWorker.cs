@@ -40,9 +40,10 @@ public sealed class MediaProcessingMonitoringWorker(IServiceScopeFactory scopes,
         {
             await using var scope = scopes.CreateAsyncScope();
             var service = scope.ServiceProvider.GetRequiredService<MediaProcessingMonitoringService>();
-            RecordBacklog(await service.ReadBacklogAsync(deadline.Token));
-            var jobs = await service.ReadProcessingBacklogAsync(deadline.Token);
-            foreach (var job in jobs) RecordJobBacklog(job);
+            var sampledAt = clock.GetUtcNow();
+            RecordBacklog(await service.ReadBacklogAsync(deadline.Token), sampledAt);
+            var jobs = await service.ReadProcessingBacklogAsync(sampledAt, deadline.Token);
+            foreach (var job in jobs) RecordJobBacklog(job, sampledAt);
         }
         catch (Exception error) when (error is PostgresUnavailableException or PostgresWriteRejectedException
             || error is OperationCanceledException && !cancellationToken.IsCancellationRequested && deadline.IsCancellationRequested)
@@ -52,18 +53,18 @@ public sealed class MediaProcessingMonitoringWorker(IServiceScopeFactory scopes,
         }
     }
 
-    private void RecordBacklog(OutboxBacklogModel backlog)
+    private void RecordBacklog(OutboxBacklogModel backlog, DateTimeOffset sampledAt)
     {
-        var oldest = GetAgeSeconds(backlog.OldestPendingAt);
+        var oldest = GetAgeSeconds(backlog.OldestPendingAt, sampledAt);
         telemetry.RecordBacklog(backlog, oldest);
         logger.LogInformation(new EventId(4302, "media.processing.outbox_sample"),
             "Media confirmation Outbox sample. {PendingCount} {FailedCount} {OldestPendingAgeSeconds}",
             backlog.PendingCount, backlog.FailedCount, oldest);
     }
 
-    private void RecordJobBacklog(MediaProcessingBacklogModel backlog)
+    private void RecordJobBacklog(MediaProcessingBacklogModel backlog, DateTimeOffset sampledAt)
     {
-        var oldest = GetAgeSeconds(backlog.OldestPendingAt);
+        var oldest = GetAgeSeconds(backlog.OldestPendingAt, sampledAt);
         telemetry.RecordJobBacklog(backlog, oldest);
         logger.LogInformation(new EventId(4304, "media.processing.jobs_sample"),
             "Media jobs sample. {MediaType} {Cohort} {PendingCount} {ActiveCount} {ReconcilingCount} {OldestPendingAgeSeconds}",
@@ -71,6 +72,6 @@ public sealed class MediaProcessingMonitoringWorker(IServiceScopeFactory scopes,
             backlog.ActiveCount, backlog.ReconcilingCount, oldest);
     }
 
-    private double GetAgeSeconds(DateTimeOffset? oldest) =>
-        oldest is { } time ? Math.Max(0, (clock.GetUtcNow() - time).TotalSeconds) : 0;
+    private static double GetAgeSeconds(DateTimeOffset? oldest, DateTimeOffset sampledAt) =>
+        oldest is { } time ? Math.Max(0, (sampledAt - time).TotalSeconds) : 0;
 }
