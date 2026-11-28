@@ -6,7 +6,8 @@ namespace ScrapBook.Domain.Interfaces;
 public interface IMediaAudioRepository
 {
     Task<IEventTransaction> BeginAsync(CancellationToken cancellationToken);
-    Task<MediaJobEntity?> FindEligibleAudioAsync(DateTimeOffset now, bool historical, CancellationToken cancellationToken);
+    Task<MediaJobEntity?> FindEligibleAudioAsync(DateTimeOffset now, bool historical, bool reconciliationOnly,
+        CancellationToken cancellationToken);
     Task<MediaSourceEntity?> FindSourceAsync(MediaConfirmationModel message, bool lockFile, CancellationToken cancellationToken);
     Task<MediaAudioAttemptEntity?> FindAudioAttemptAsync(long jobId, long attemptId, CancellationToken cancellationToken);
     Task<long> StartAudioAsync(MediaJobEntity job, string profile, string bucket, Guid lease, DateTimeOffset leaseUntil,

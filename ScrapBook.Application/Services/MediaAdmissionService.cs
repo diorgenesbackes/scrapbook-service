@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ScrapBook.Application.Codecs;
+using ScrapBook.Application.Diagnostics;
 using ScrapBook.Domain.Entities;
 using ScrapBook.Domain.Interfaces;
 using ScrapBook.Domain.Models;
@@ -8,7 +9,7 @@ using static ScrapBook.Application.Services.MediaConfirmationService;
 namespace ScrapBook.Application.Services;
 
 public sealed class MediaAdmissionService(IMediaAdmissionRepository repository, IOutboxRepository outbox, TimeProvider clock,
-    DateTimeOffset? historicalBefore = null)
+    DateTimeOffset? historicalBefore = null, MediaProcessingTelemetry? telemetry = null)
 {
     public async Task<MediaAdmissionResult> AdmitAsync(string body, CancellationToken cancellationToken)
     {
@@ -44,11 +45,14 @@ public sealed class MediaAdmissionService(IMediaAdmissionRepository repository, 
             return MediaAdmissionResult.Quarantined;
         }
 
-        if (!await PersistAsync(repository, message, original, hash, message.ConfirmedAt < historicalBefore, now, cancellationToken))
+        var historical = message.ConfirmedAt < historicalBefore;
+        if (!await PersistAsync(repository, message, original, hash, historical, now, cancellationToken))
         {
             return MediaAdmissionResult.Quarantined;
         }
         await transaction.CommitAsync(cancellationToken);
+        telemetry?.Record(MediaProcessingStage.Admission, MediaProcessingOutcome.Admitted, original.Kind, historical,
+            (clock.GetUtcNow() - message.ConfirmedAt).TotalSeconds);
         return MediaAdmissionResult.Admitted;
     }
 

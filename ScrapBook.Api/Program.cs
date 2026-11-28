@@ -21,6 +21,7 @@ using ScrapBook.Api.Options;
 using ScrapBook.Api.Runners;
 using ScrapBook.Api.Workers;
 using ScrapBook.Api.Writers;
+using ScrapBook.Application.Diagnostics;
 using ScrapBook.Application.Services;
 using ScrapBook.Domain.Interfaces;
 using ScrapBook.Domain.Models;
@@ -207,18 +208,24 @@ if (eventStructuralLock.Enabled)
 }
 if (mediaProcessing.Enabled)
 {
+    builder.Services.AddSingleton(mediaProcessing);
+    builder.Services.AddSingleton<MediaProcessingTelemetry>();
+    builder.Services.AddScoped<MediaProcessingMonitoringService>();
+    builder.Services.AddScoped<IMediaProcessingMonitoringRepository, MediaProcessingMonitoringRepository>();
     builder.Services.AddScoped<MediaPreparationRepository>();
     builder.Services.AddScoped<IMediaAdmissionRepository>(services => services.GetRequiredService<MediaPreparationRepository>());
     builder.Services.AddScoped<IMediaPreparationRepository>(services => services.GetRequiredService<MediaPreparationRepository>());
     builder.Services.AddScoped(services => new MediaAdmissionService(services.GetRequiredService<IMediaAdmissionRepository>(),
-        services.GetRequiredService<IOutboxRepository>(), services.GetRequiredService<TimeProvider>(), mediaProcessing.HistoricalBefore));
+        services.GetRequiredService<IOutboxRepository>(), services.GetRequiredService<TimeProvider>(), mediaProcessing.HistoricalBefore,
+        services.GetRequiredService<MediaProcessingTelemetry>()));
     builder.Services.AddScoped<MediaPreparationService>();
     builder.Services.AddScoped<MediaOutboxPublisherService>(services => new MediaOutboxPublisherService(
         services.GetRequiredService<IOutboxRepository>(),
         services.GetRequiredKeyedService<IOutboxPublisher>(MediaProcessingOptions.SectionName),
         services.GetRequiredService<IMediaAdmissionRepository>(),
         services.GetRequiredService<IMediaPreparationRepository>(),
-        services.GetRequiredService<TimeProvider>(), mediaProcessing.HistoricalBefore));
+        services.GetRequiredService<TimeProvider>(), mediaProcessing.HistoricalBefore,
+        services.GetRequiredService<MediaProcessingTelemetry>()));
     builder.Services.AddKeyedSingleton<IAmazonSimpleNotificationService>(MediaProcessingOptions.SectionName, (_, _) =>
         new AmazonSimpleNotificationServiceClient(MessagingConfiguration(new AmazonSimpleNotificationServiceConfig(),
             mediaProcessing.Region, mediaProcessing.SnsServiceUrl)));
@@ -230,9 +237,13 @@ if (mediaProcessing.Enabled)
         services.GetRequiredKeyedService<IAmazonSQS>(MediaProcessingOptions.SectionName), mediaProcessing.QueueUrl));
     builder.Services.AddSingleton<IMediaVariantStorage, S3MediaVariantStorage>();
     builder.Services.AddSingleton<IPhotoVariantProcessor, ProcessPhotoVariantProcessor>();
-    builder.Services.AddHostedService<MediaOutboxPublisherWorker>();
-    builder.Services.AddHostedService<MediaAdmissionWorker>();
-    builder.Services.AddHostedService<MediaPreparationWorker>();
+    if (!mediaProcessing.Paused)
+    {
+        builder.Services.AddHostedService<MediaOutboxPublisherWorker>();
+        builder.Services.AddHostedService<MediaAdmissionWorker>();
+        builder.Services.AddHostedService<MediaPreparationWorker>();
+    }
+    builder.Services.AddHostedService<MediaProcessingMonitoringWorker>();
 }
 if (mediaAudioProcessing.Enabled)
 {

@@ -86,7 +86,8 @@ public sealed class MediaPreparationRepository(ScrapBookDbContext context) : IMe
                 j.attempt_count AS "AttemptCount", j.retry_cycle AS "RetryCycle",
                 j.confirmation_message_id AS "ConfirmationMessageId", j.confirmation_correlation_id AS "ConfirmationCorrelationId",
                 j.confirmed_at AS "ConfirmedAt", a.active_id AS "ActiveAttemptId", COALESCE(a.last_number, 0) AS "LastAttemptNumber",
-                j.profile::text AS "Profile", f.kind AS "FileKind"
+                j.profile::text AS "Profile", f.kind AS "FileKind", j.is_historical AS "IsHistorical",
+                j.created_at AS "AdmittedAt"
             FROM scrapbook.processing_jobs AS j
             JOIN scrapbook.files AS f ON f.id = j.processing_jobs_files_id AND f.profile_version = j.profile_version
             JOIN scrapbook.records AS r ON r.id = f.files_records_id
