@@ -16,8 +16,11 @@ public sealed class MediaPreparationRecoveryServiceTests
     private readonly MediaPreparationRecoveryRepositoryStub repository = new() { Fact = MediaPreparationTestFixture.Outbox() };
     private readonly MediaAdmissionRepositoryStub admission = new();
     private readonly MediaRecoveryAccessRepositoryStub audit = new();
+    private readonly MediaHistoryRepositoryStub history = new();
+    private readonly OutboxTestRepository historyOutbox = new();
     private readonly EventTestTimeProvider clock = new() { Now = Confirmation.ConfirmedAt.AddDays(30) };
-    private MediaPreparationRecoveryService Service => new(repository, admission, audit, new(audit), clock);
+    private MediaPreparationRecoveryService Service => new(repository, admission, audit, new(audit), clock,
+        new(history, admission, historyOutbox, audit, new(audit), clock));
 
     [Theory]
     [InlineData(true)]
@@ -243,6 +246,56 @@ public sealed class MediaPreparationRecoveryServiceTests
         Assert.Empty(admission.Jobs);
         Assert.Empty(repository.Reopened);
         Assert.Single(admission.Deliveries);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RestoresProtectionAfterOutboxArchivalUsingTheOriginalReceiptAndPersistedEffectAsync(bool receiptWithCorrelation)
+    {
+        using var cancellation = new CancellationTokenSource();
+        clock.Now = Confirmation.ConfirmedAt.AddDays(61);
+        var prior = SetFailedJob();
+        repository.Fact = null;
+        history.Sources.Add(Confirmation.FileId, admission.Source!);
+        history.Receipt = new("photo", "contribution.create", "confirmed", Confirmation.ConfirmedAt, "confirmed",
+            Confirmation.ConfirmedAt, receiptWithCorrelation ? Confirmation.CorrelationId : null);
+        history.Work = new(prior.Id, prior.ConfirmationMessageId, prior.ConfirmationCorrelationId, prior.ConfirmedAt, false);
+
+        var result = await Service.RedriveAsync(RedriveRequest with { Apply = true }, cancellation.Token);
+
+        Assert.Equal(new MediaRecoveryResult("MEDIA_REDRIVE_PROTECTION_RESTORED", true), result);
+        Assert.Equal((Confirmation.EventId, Confirmation.MessageId, cancellation.Token), Assert.Single(history.FactReads));
+        var restored = Assert.Single(admission.Deliveries);
+        Assert.Equal(Confirmation, restored.Message);
+        Assert.Equal(MediaConfirmationCodec.Hash(Confirmation), restored.Hash);
+        Assert.Equal(prior, repository.Job);
+        Assert.Empty(admission.Jobs);
+        Assert.Empty(repository.Reopened);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(1)]
+    public async Task NeverTreatsAnArchivedFactAsNewWithoutProvingItsPersistedEffectAsync(int? confirmationOffsetSeconds)
+    {
+        clock.Now = Confirmation.ConfirmedAt.AddDays(61);
+        repository.Fact = null;
+        history.Sources.Add(Confirmation.FileId, MediaPreparationTestFixture.Source());
+        history.Receipt = new("photo", "contribution.create", "confirmed", Confirmation.ConfirmedAt, "confirmed",
+            Confirmation.ConfirmedAt, Confirmation.CorrelationId);
+        if (confirmationOffsetSeconds is int seconds)
+        {
+            history.Work = new(1, Confirmation.MessageId, Confirmation.CorrelationId, Confirmation.ConfirmedAt.AddSeconds(seconds), false);
+        }
+
+        var result = await Service.RedriveAsync(RedriveRequest with { Apply = true }, CancellationToken.None);
+
+        Assert.Equal(new MediaRecoveryResult("MEDIA_REDRIVE_FACT_UNPROVEN", false), result);
+        Assert.Empty(admission.Deliveries);
+        Assert.Empty(admission.Jobs);
+        Assert.Empty(repository.Reopened);
+        Assert.Equal("rejected", Assert.Single(audit.Entries).Entry.Outcome);
     }
 
     [Theory]
