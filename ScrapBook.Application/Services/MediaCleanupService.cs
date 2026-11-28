@@ -11,6 +11,7 @@ public sealed class MediaCleanupService(MediaRecoveryAccessService access, IMedi
     public async Task<MediaRecoveryBatchResult> ScanAsync(MediaRecoveryBatchCommand command,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!MediaRecoveryAccessService.IsValid(command)) return new("MEDIA_RECOVERY_INVALID_ARGUMENT", command.AfterId, 0, 0, 0, 0);
         var principal = await access.FindOperatorAsync(cancellationToken);
         if (principal is null) return new("MEDIA_RECOVERY_FORBIDDEN", command.AfterId, 0, 0, 0, 0);
@@ -45,21 +46,33 @@ public sealed class MediaCleanupService(MediaRecoveryAccessService access, IMedi
     private async Task<bool> TryDeleteAsync(MediaCleanupObjectModel candidate, MediaRecoveryAuditModel entry,
         DateTimeOffset cutoff, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        long? version;
-        await using (var transaction = await repository.BeginAsync(cancellationToken))
-        {
-            version = await repository.ClaimAsync(entry.EventId, candidate, cutoff, now, cancellationToken);
-            if (version is null) return false;
-            await audit.AuditAsync(entry, cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
-        }
-
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         budget.CancelAfter(TimeSpan.FromMinutes(2));
         try
         {
-            if (!await storage.DeleteExpiredVersionsAsync(candidate.Bucket, candidate.ObjectKey, cutoff, budget.Token))
+            var versionId = candidate.VersionId ?? await storage.FindExpiredVersionAsync(candidate.Bucket,
+                candidate.ObjectKey, cutoff, budget.Token);
+            if (string.IsNullOrWhiteSpace(versionId) || versionId == "null" || candidate.LastModified > cutoff)
                 return false;
+
+            var lease = Guid.NewGuid();
+            long? version;
+            await using (var transaction = await repository.BeginAsync(cancellationToken))
+            {
+                version = await repository.ClaimAsync(entry.EventId, candidate, versionId, lease, cutoff, now,
+                    cancellationToken);
+                if (version is null) return false;
+                await audit.AuditAsync(entry, cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+            }
+
+            await storage.DeleteVersionAsync(candidate.Bucket, candidate.ObjectKey, versionId, budget.Token);
+            await using var completion = await repository.BeginAsync(cancellationToken);
+            if (!await repository.CompleteAsync(candidate.Id, version.Value, lease, clock.GetUtcNow(), cancellationToken))
+                return false;
+            await audit.AuditAsync(entry with { ReasonCode = "expired_attempt_version_removed" }, cancellationToken);
+            await completion.CommitAsync(cancellationToken);
+            return true;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && budget.IsCancellationRequested)
         {
@@ -69,12 +82,6 @@ public sealed class MediaCleanupService(MediaRecoveryAccessService access, IMedi
         {
             return false;
         }
-
-        await using var completion = await repository.BeginAsync(cancellationToken);
-        if (!await repository.CompleteAsync(candidate.Id, version.Value, clock.GetUtcNow(), cancellationToken)) return false;
-        await audit.AuditAsync(entry with { ReasonCode = "expired_attempt_versions_removed" }, cancellationToken);
-        await completion.CommitAsync(cancellationToken);
-        return true;
     }
 
     private bool IsEligible(MediaCleanupObjectModel candidate)
