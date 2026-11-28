@@ -60,7 +60,11 @@ public static class MediaPreparationRecoveryRunner
             var database = DatabaseOptions.ForMediaRecovery(builder.Configuration);
             builder.Services.AddDbContext<ScrapBookDbContext>(options => options.UseNpgsql(database.ConnectionString));
             Register(builder.Services, historyBefore);
-            if (mode == "cleanup") RegisterCleanup(builder);
+            if (mode == "cleanup" && command is MediaRecoveryBatchCommand cleanup)
+            {
+                command = cleanup with { CleanupObjectId = ReadCleanupObjectId(builder.Configuration, cleanup.Apply) };
+                RegisterCleanup(builder);
+            }
             using var host = builder.Build();
             await using var scope = host.Services.CreateAsyncScope();
             return await ExecuteAsync(mode, command, scope.ServiceProvider, deadline.Token);
@@ -120,6 +124,15 @@ public static class MediaPreparationRecoveryRunner
             services.GetRequiredService<MediaRecoveryAccessService>(), services.GetRequiredService<IMediaRecoveryAccessRepository>(),
             services.GetRequiredService<IMediaCleanupRepository>(), services.GetRequiredService<IMediaCleanupStorage>(),
             services.GetRequiredService<TimeProvider>(), bucket));
+    }
+
+    private static long? ReadCleanupObjectId(IConfiguration configuration, bool apply)
+    {
+        const string key = "MediaRecovery:CleanupObjectId";
+        var objectId = configuration[key];
+        if (objectId is null && (!apply || configuration["PhotoSubmissions:StorageServiceUrl"] is not null)) return null;
+        if (objectId is null || !ReadId(objectId, out var id) || id <= 0) throw new StartupConfigurationException(key);
+        return id;
     }
 
     private static object? ReadCommand(string mode, string[] parameters, bool apply) => mode switch
