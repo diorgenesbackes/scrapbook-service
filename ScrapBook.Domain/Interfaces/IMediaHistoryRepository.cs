@@ -7,6 +7,7 @@ public interface IMediaHistoryRepository
 {
     Task<IReadOnlyList<MediaHistoryCandidateModel>> FindPageAsync(long eventId, long afterId, int limit, DateTimeOffset historicalBefore,
         CancellationToken cancellationToken);
+    Task<MediaHistoryCandidateModel?> FindByMessageIdAsync(long eventId, Guid messageId, CancellationToken cancellationToken);
     Task<MediaSourceEntity?> FindSourceAsync(long eventId, long recordId, long fileId, bool lockFile,
         CancellationToken cancellationToken);
     Task<MediaHistoryReceiptModel?> FindReceiptAsync(long eventId, long recordId, CancellationToken cancellationToken);

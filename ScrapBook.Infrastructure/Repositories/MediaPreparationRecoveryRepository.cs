@@ -22,9 +22,13 @@ public sealed class MediaPreparationRecoveryRepository(MediaPreparationRepositor
             SELECT delivery.id AS "Id", delivery.payload_hash AS "PayloadHash", delivery.state AS "State",
                 delivery.error_code AS "ErrorCode"
             FROM scrapbook.processed_messages AS delivery
-            JOIN scrapbook.outbox_messages AS fact ON fact.message_id = delivery.message_id
-            WHERE fact.aggregate_type = 'event' AND fact.aggregate_id = {eventId} AND fact.message_id = {messageId}
-                AND delivery.consumer = {consumer} AND delivery.source = {source}
+            WHERE delivery.message_id = {messageId} AND delivery.consumer = {consumer} AND delivery.source = {source}
+                AND (EXISTS (SELECT 1 FROM scrapbook.outbox_messages AS fact
+                        WHERE fact.message_id = delivery.message_id AND fact.aggregate_type = 'event' AND fact.aggregate_id = {eventId})
+                    OR EXISTS (SELECT 1 FROM scrapbook.processing_jobs AS job
+                        JOIN scrapbook.files AS file ON file.id = job.processing_jobs_files_id AND file.profile_version = job.profile_version
+                        JOIN scrapbook.records AS record ON record.id = file.files_records_id
+                        WHERE job.confirmation_message_id = delivery.message_id AND record.records_events_id = {eventId}))
             """, cancellationToken);
 
     public Task<MediaRecoveryJobEntity?> FindJobAsync(long eventId, long fileId, int profileVersion, bool lockJob,

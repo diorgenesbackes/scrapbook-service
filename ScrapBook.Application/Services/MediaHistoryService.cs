@@ -13,6 +13,8 @@ namespace ScrapBook.Application.Services;
 public sealed class MediaHistoryService(IMediaHistoryRepository repository, IMediaAdmissionRepository admission,
     IOutboxRepository outbox, IMediaRecoveryAccessRepository audit, MediaRecoveryAccessService access, TimeProvider clock)
 {
+    private const string ReceiptWithoutCorrelation = "MEDIA_HISTORY_RECEIPT_TECHNICAL_CORRELATION";
+
     public async Task<MediaRecoveryBatchResult> ScanAsync(MediaRecoveryBatchCommand command, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -40,7 +42,7 @@ public sealed class MediaHistoryService(IMediaHistoryRepository repository, IMed
                 case MediaHistoryFileResult.Simulated: deferred++; break;
             }
         }
-        return new("OK", files.LastOrDefault()?.FileId ?? command.AfterId, files.Count, changed, rejected, deferred);
+        return new("OK", files.Count == 0 ? command.AfterId : files[^1].FileId, files.Count, changed, rejected, deferred);
     }
 
     private async Task<MediaHistoryFileResult> ScanFileAsync(MediaRecoveryBatchCommand command, string actor,
@@ -62,17 +64,17 @@ public sealed class MediaHistoryService(IMediaHistoryRepository repository, IMed
             return MediaHistoryFileResult.AlreadyAdmitted;
         }
 
-        correlationId = confirmation.CorrelationId;
         var photo = source.Kind == "photo";
         var kind = photo ? "photo_prepare" : "av_transcode";
         var work = await repository.FindWorkAsync(file.FileId, kind, source.ProfileVersion, cancellationToken);
+        confirmation = ApplyPersistedCorrelation(confirmation, evidence, work);
+        correlationId = confirmation.CorrelationId;
         var hash = MediaConfirmationCodec.Hash(confirmation);
         var delivery = await admission.FindDeliveryAsync(Consumer, Source, messageId, cancellationToken);
         if (work.JobId is not null)
         {
             if (work.MessageId is null) return await RejectAsync("MEDIA_HISTORY_LEGACY_JOB_UNVERIFIED");
-            if (work.MessageId == messageId && work.CorrelationId == confirmation.CorrelationId
-                && work.ConfirmedAt == MediaConfirmationCodec.MicrosecondPrecision(confirmation.ConfirmedAt))
+            if (MatchesPersistedIdentity(confirmation, work) && work.CorrelationId == confirmation.CorrelationId)
             {
                 if (delivery is not null)
                     return MatchesDelivery(delivery, hash) ? MediaHistoryFileResult.AlreadyAdmitted
@@ -111,6 +113,30 @@ public sealed class MediaHistoryService(IMediaHistoryRepository repository, IMed
         }
     }
 
+    internal async Task<MediaConfirmationModel?> FindArchivedConfirmationAsync(long eventId, Guid messageId,
+        CancellationToken cancellationToken)
+    {
+        var file = await repository.FindByMessageIdAsync(eventId, messageId, cancellationToken);
+        if (file is null || MediaConfirmationCodec.MessageId(file.FileId) != messageId) return null;
+
+        var source = await repository.FindSourceAsync(eventId, file.RecordId, file.FileId, true, cancellationToken);
+        if (source is null) return null;
+        var (confirmation, evidence) = await FindConfirmationAsync(eventId, file, source, messageId, cancellationToken);
+        if (confirmation is null || !MatchesSource(confirmation, source)) return null;
+        var work = await repository.FindWorkAsync(file.FileId, source.Kind == "photo" ? "photo_prepare" : "av_transcode",
+            source.ProfileVersion, cancellationToken);
+        return MatchesPersistedIdentity(confirmation, work) ? ApplyPersistedCorrelation(confirmation, evidence, work) : null;
+    }
+
+    private static bool MatchesPersistedIdentity(MediaConfirmationModel confirmation, MediaHistoryWorkModel work) =>
+        work.JobId is not null && work.MessageId == confirmation.MessageId
+        && work.ConfirmedAt == MediaConfirmationCodec.MicrosecondPrecision(confirmation.ConfirmedAt);
+
+    private static MediaConfirmationModel ApplyPersistedCorrelation(MediaConfirmationModel confirmation, string evidence,
+        MediaHistoryWorkModel work) => evidence == ReceiptWithoutCorrelation && MatchesPersistedIdentity(confirmation, work)
+        && work.CorrelationId is { } correlation && correlation != Guid.Empty
+        ? confirmation with { CorrelationId = correlation } : confirmation;
+
     private async Task<(MediaConfirmationModel? Confirmation, string Evidence)> FindConfirmationAsync(long eventId,
         MediaHistoryCandidateModel file, MediaSourceEntity source, Guid messageId, CancellationToken cancellationToken)
     {
@@ -131,7 +157,7 @@ public sealed class MediaHistoryService(IMediaHistoryRepository repository, IMed
         var instant = completedAt.ToUniversalTime();
         var correlation = receipt.CorrelationId ?? TechnicalCorrelation(messageId);
         return (new(messageId, eventId, file.RecordId, file.FileId, instant, instant, correlation),
-            receipt.CorrelationId is null ? "MEDIA_HISTORY_RECEIPT_TECHNICAL_CORRELATION" : "MEDIA_HISTORY_RECEIPT");
+            receipt.CorrelationId is null ? ReceiptWithoutCorrelation : "MEDIA_HISTORY_RECEIPT");
     }
 
     private Task AuditAsync(MediaRecoveryBatchCommand command, string actor, long fileId, Guid correlationId,
