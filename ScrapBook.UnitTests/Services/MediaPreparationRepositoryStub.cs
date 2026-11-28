@@ -32,7 +32,7 @@ internal sealed class MediaPreparationRepositoryStub : IMediaPreparationReposito
         return Task.FromResult<IEventTransaction>(transaction);
     }
 
-    public Task<MediaJobEntity?> FindEligiblePhotoAsync(DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<MediaJobEntity?> FindEligiblePhotoAsync(DateTimeOffset now, bool historical, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(Eligible);

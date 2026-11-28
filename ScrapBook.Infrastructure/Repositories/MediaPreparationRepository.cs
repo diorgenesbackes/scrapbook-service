@@ -15,7 +15,12 @@ public sealed class MediaPreparationRepository(ScrapBookDbContext context) : IMe
     public Task<IEventTransaction> BeginAsync(CancellationToken cancellationToken) =>
         ExecuteAsync<IEventTransaction>(async () => new EventTransaction(await context.Database.BeginTransactionAsync(cancellationToken)));
 
-    public Task<MediaSourceEntity?> FindSourceAsync(MediaConfirmationModel message, bool lockFile, CancellationToken cancellationToken)
+    public Task<MediaSourceEntity?> FindSourceAsync(MediaConfirmationModel message, bool lockFile,
+        CancellationToken cancellationToken) =>
+        FindSourceAsync(message.EventId, message.RecordId, message.FileId, lockFile, cancellationToken);
+
+    internal Task<MediaSourceEntity?> FindSourceAsync(long eventId, long recordId, long fileId, bool lockFile,
+        CancellationToken cancellationToken)
     {
         const string sql = """
             SELECT r.records_events_id AS "EventId", r.id AS "RecordId", f.id AS "FileId", f.kind AS "Kind",
@@ -31,7 +36,7 @@ public sealed class MediaPreparationRepository(ScrapBookDbContext context) : IMe
                 AND f.sha256 IS NOT NULL
             """;
         return QueryAsync<MediaSourceEntity>(FormattableStringFactory.Create(lockFile ? sql + " FOR UPDATE OF f" : sql,
-            message.EventId, message.RecordId, message.FileId), cancellationToken);
+            eventId, recordId, fileId), cancellationToken);
     }
 
     public Task<ProcessedMessageEntity?> FindDeliveryAsync(string consumer, string source, Guid messageId,
@@ -51,18 +56,22 @@ public sealed class MediaPreparationRepository(ScrapBookDbContext context) : IMe
             VALUES ({consumer}, {source}, {message.MessageId}, {hash}, {message.CorrelationId}, 'completed', 1, {now})
             """, cancellationToken));
 
-    public async Task<bool> InsertJobAsync(MediaConfirmationModel message, int profileVersion, string kind, string profile,
-        string[] variantKinds, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<bool> InsertJobAsync(MediaConfirmationModel message, int profileVersion, string kind, string profile,
+        string[] variantKinds, DateTimeOffset now, CancellationToken cancellationToken) =>
+        InsertJobAsync(message, profileVersion, kind, profile, variantKinds, false, now, cancellationToken);
+
+    internal async Task<bool> InsertJobAsync(MediaConfirmationModel message, int profileVersion, string kind, string profile,
+        string[] variantKinds, bool isHistorical, DateTimeOffset now, CancellationToken cancellationToken)
     {
         var rows = await ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync($"""
             WITH job AS (
                 INSERT INTO scrapbook.processing_jobs (
                     processing_jobs_files_id, kind, profile_version, profile, state, next_attempt_at,
-                    confirmation_message_id, confirmation_correlation_id, confirmed_at
+                    confirmation_message_id, confirmation_correlation_id, confirmed_at, is_historical
                 )
                 VALUES (
                     {message.FileId}, {kind}, {profileVersion}, CAST({profile} AS jsonb), 'pending', {now},
-                    {message.MessageId}, {message.CorrelationId}, {message.ConfirmedAt}
+                    {message.MessageId}, {message.CorrelationId}, {message.ConfirmedAt}, {isHistorical}
                 )
                 ON CONFLICT (processing_jobs_files_id, kind, profile_version) DO NOTHING
                 RETURNING processing_jobs_files_id
@@ -74,7 +83,7 @@ public sealed class MediaPreparationRepository(ScrapBookDbContext context) : IMe
         return rows == variantKinds.Length;
     }
 
-    public Task<MediaJobEntity?> FindEligiblePhotoAsync(DateTimeOffset now, CancellationToken cancellationToken) =>
+    public Task<MediaJobEntity?> FindEligiblePhotoAsync(DateTimeOffset now, bool historical, CancellationToken cancellationToken) =>
         QueryAsync<MediaJobEntity>($"""
             SELECT j.id AS "Id", r.records_events_id AS "EventId", r.id AS "RecordId", f.id AS "FileId",
                 j.profile_version AS "ProfileVersion", j.version AS "Version", j.state AS "State",
@@ -92,6 +101,7 @@ public sealed class MediaPreparationRepository(ScrapBookDbContext context) : IMe
                 WHERE processing_attempts_processing_jobs_id = j.id
             ) AS a
             WHERE j.kind = 'photo_prepare' AND j.state IN ('pending', 'running') AND j.confirmed_at IS NOT NULL
+                AND j.is_historical = {historical}
                 AND j.next_attempt_at <= {now} AND (j.lease_until IS NULL OR j.lease_until <= {now})
             ORDER BY j.next_attempt_at, j.id
             LIMIT 1
@@ -264,8 +274,11 @@ public sealed class MediaPreparationRepository(ScrapBookDbContext context) : IMe
             JsonSerializer.Deserialize<MediaVariantReferenceModel[]>(row.Variants) ?? [], row.Kind);
     }
 
-    internal Task<T?> QueryAsync<T>(FormattableString sql, CancellationToken cancellationToken) =>
-        ExecuteAsync(async () => (await context.Database.SqlQuery<T>(sql).ToListAsync(cancellationToken)).SingleOrDefault());
+    internal async Task<T?> QueryAsync<T>(FormattableString sql, CancellationToken cancellationToken) =>
+        (await QueryListAsync<T>(sql, cancellationToken)).SingleOrDefault();
+
+    internal Task<List<T>> QueryListAsync<T>(FormattableString sql, CancellationToken cancellationToken) =>
+        ExecuteAsync(() => context.Database.SqlQuery<T>(sql).ToListAsync(cancellationToken));
 
     internal async Task RequireWriteAsync(FormattableString sql, CancellationToken cancellationToken)
     {

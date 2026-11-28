@@ -40,9 +40,12 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
         _ => false
     };
 
-    public async Task<bool> PrepareNextAsync(CancellationToken cancellationToken)
+    public Task<bool> PrepareNextAsync(CancellationToken cancellationToken) =>
+        PrepareNextAsync(true, cancellationToken);
+
+    public async Task<bool> PrepareNextAsync(bool allowHistorical, CancellationToken cancellationToken)
     {
-        var claim = await ClaimAsync(cancellationToken);
+        var claim = await ClaimAsync(allowHistorical, cancellationToken);
         if (claim.Work is { } work)
         {
             await PrepareAsync(work, cancellationToken);
@@ -50,11 +53,16 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
         return claim.Found;
     }
 
-    private async Task<(bool Found, PhotoPreparationWorkModel? Work)> ClaimAsync(CancellationToken cancellationToken)
+    private async Task<(bool Found, PhotoPreparationWorkModel? Work)> ClaimAsync(bool allowHistorical,
+        CancellationToken cancellationToken)
     {
         await using var transaction = await repository.BeginAsync(cancellationToken);
         var now = clock.GetUtcNow();
-        var job = await repository.FindEligiblePhotoAsync(now, cancellationToken);
+        var job = await repository.FindEligiblePhotoAsync(now, false, cancellationToken);
+        if (job is null && allowHistorical)
+        {
+            job = await repository.FindEligiblePhotoAsync(now, true, cancellationToken);
+        }
         if (job is null) return (false, null);
 
         if (job.ActiveAttemptId is { } interrupted)
