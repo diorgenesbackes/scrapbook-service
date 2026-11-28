@@ -17,9 +17,28 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
     private static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan PreparationBudget = TimeSpan.FromSeconds(75);
 
-    public Task<MediaFileProjectionModel?> GetFileAsync(long eventId, long recordId, long fileId,
-        CancellationToken cancellationToken) =>
-        repository.GetFileAsync(eventId, recordId, fileId, cancellationToken);
+    public async Task<MediaFileProjectionModel?> GetFileAsync(long eventId, long recordId, long fileId,
+        CancellationToken cancellationToken)
+    {
+        var file = await repository.GetFileAsync(eventId, recordId, fileId, cancellationToken);
+        if (file is null) return null;
+        if (file.State == "available" && HasAllReadyVariants(file)) return file;
+
+        var state = file.State switch
+        {
+            "not_requested" => "pending",
+            "available" => "failed",
+            _ => file.State
+        };
+        return file with { State = state, Variants = [] };
+    }
+
+    private static bool HasAllReadyVariants(MediaFileProjectionModel file) => file.Kind switch
+    {
+        "photo" => file.Variants is [{ Kind: "image" }, { Kind: "thumbnail" }],
+        "audio" or "video" => file.Variants is [{ Kind: "playback" }],
+        _ => false
+    };
 
     public async Task<bool> PrepareNextAsync(CancellationToken cancellationToken)
     {
