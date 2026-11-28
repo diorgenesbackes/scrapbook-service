@@ -13,15 +13,22 @@ public sealed class DatabaseOptions
     public string ConnectionString { get; }
     public TimeSpan ReadinessTimeout { get; }
 
-    public static DatabaseOptions FromConfiguration(IConfiguration configuration)
+    public static DatabaseOptions FromConfiguration(IConfiguration configuration) =>
+        FromConfiguration(configuration, "ScrapBook", false);
+
+    public static DatabaseOptions ForMediaRecovery(IConfiguration configuration) =>
+        FromConfiguration(configuration, "ScrapBookMediaRecovery", true);
+
+    private static DatabaseOptions FromConfiguration(IConfiguration configuration, string connectionName, bool mediaRecovery)
     {
-        var source = configuration.GetConnectionString("ScrapBook");
+        var path = $"ConnectionStrings:{connectionName}";
+        var source = configuration.GetConnectionString(connectionName);
         if (string.IsNullOrWhiteSpace(source))
         {
-            throw new StartupConfigurationException("ConnectionStrings:ScrapBook");
+            throw new StartupConfigurationException(path);
         }
 
-        var settings = ParseConnection(source);
+        var settings = ParseConnection(source, path, mediaRecovery);
         if (!bool.TryParse(configuration["Database:RequireTls"] ?? "false", out var requireTls))
         {
             throw new StartupConfigurationException("Database:RequireTls");
@@ -30,7 +37,7 @@ public sealed class DatabaseOptions
         if (requireTls && (settings.SslMode != SslMode.VerifyFull
             || settings.RootCertificate != "/app/certs/rds-us-east-1.pem"))
         {
-            throw new StartupConfigurationException("ConnectionStrings:ScrapBook");
+            throw new StartupConfigurationException(path);
         }
 
         var timeoutValue = configuration["Database:ReadinessTimeoutMs"] ?? "2000";
@@ -42,7 +49,7 @@ public sealed class DatabaseOptions
         return new DatabaseOptions(settings.ConnectionString, TimeSpan.FromMilliseconds(timeout));
     }
 
-    private static NpgsqlConnectionStringBuilder ParseConnection(string value)
+    private static NpgsqlConnectionStringBuilder ParseConnection(string value, string path, bool mediaRecovery)
     {
         NpgsqlConnectionStringBuilder settings;
         try
@@ -51,14 +58,15 @@ public sealed class DatabaseOptions
         }
         catch (ArgumentException)
         {
-            throw new StartupConfigurationException("ConnectionStrings:ScrapBook");
+            throw new StartupConfigurationException(path);
         }
 
         if (string.IsNullOrWhiteSpace(settings.Host) || string.IsNullOrWhiteSpace(settings.Database)
-            || settings.Username != "scrapbook_app" || string.IsNullOrWhiteSpace(settings.Password)
+            || string.IsNullOrWhiteSpace(settings.Username) || string.IsNullOrWhiteSpace(settings.Password)
+            || (mediaRecovery ? settings.Username is "scrapbook_app" or "scrapbook_migrator" : settings.Username != "scrapbook_app")
             || settings.IncludeErrorDetail || settings.LogParameters)
         {
-            throw new StartupConfigurationException("ConnectionStrings:ScrapBook");
+            throw new StartupConfigurationException(path);
         }
 
         if (settings.Pooling && !settings.ShouldSerialize("Maximum Pool Size"))
