@@ -11,6 +11,7 @@ internal sealed class MediaPreparationRepositoryStub : IMediaPreparationReposito
     public List<(bool Historical, CancellationToken Token)> EligibilityChecks { get; } = [];
     public MediaSourceEntity? Source { get; set; } = MediaPreparationTestFixture.Source();
     public bool RetainsLease { get; set; } = true;
+    public Func<CancellationToken, Task>? BeforeCommitAsync { get; set; }
     public MediaFileProjectionModel? Projection { get; set; }
     public List<EventWriteTestTransaction> Transactions { get; } = [];
     public List<(long EventId, long RecordId, long FileId, CancellationToken Token)> Reads { get; } = [];
@@ -29,7 +30,7 @@ internal sealed class MediaPreparationRepositoryStub : IMediaPreparationReposito
     public Task<IEventTransaction> BeginAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var transaction = new EventWriteTestTransaction();
+        var transaction = new EventWriteTestTransaction { BeforeCommitAsync = BeforeCommitAsync };
         Transactions.Add(transaction);
         return Task.FromResult<IEventTransaction>(transaction);
     }

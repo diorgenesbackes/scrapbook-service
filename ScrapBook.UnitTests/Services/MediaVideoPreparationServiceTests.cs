@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using ScrapBook.Application.Diagnostics;
 using ScrapBook.Application.Services;
 using ScrapBook.Domain.Exceptions;
 using ScrapBook.Domain.Models;
@@ -213,7 +214,8 @@ public sealed class MediaVideoPreparationServiceTests
         });
         storage.Verify = (_, key, _) => Task.FromResult(MediaVideoTestFixture.Variant(key, channels));
         var provider = new MediaTranscodingProviderStub { Create = (_, _) => throw new MediaProviderUnavailableException() };
-        var service = Service(repository, storage, provider);
+        var telemetry = new MediaProcessingTelemetry();
+        var service = Service(repository, storage, provider, telemetry: telemetry);
 
         Assert.True(await service.PrepareNextAsync(CancellationToken.None));
         var submission = Assert.Single(provider.Submissions).Request;
@@ -241,6 +243,10 @@ public sealed class MediaVideoPreparationServiceTests
         Assert.Single(provider.Submissions);
         Assert.Single(repository.Promotions);
         Assert.Empty(repository.Failures);
+        var ready = Assert.Single(telemetry.CollectInterval(), measurement => measurement.Stage == "ready");
+        Assert.Equal(("video", "recent", "available", 1L), (ready.MediaType, ready.Cohort, ready.Outcome, ready.SampleCount));
+        Assert.Equal(10, ready.DurationSumSeconds);
+        Assert.Equal(1, ready.WithinTargetCount);
     }
 
     [Fact]
@@ -470,7 +476,7 @@ public sealed class MediaVideoPreparationServiceTests
     };
 
     private static MediaAudioPreparationService Service(MediaAudioRepositoryStub repository, MediaVideoStorageStub storage,
-        MediaTranscodingProviderStub provider, TimeProvider? clock = null) =>
+        MediaTranscodingProviderStub provider, TimeProvider? clock = null, MediaProcessingTelemetry? telemetry = null) =>
         new(repository, new MediaAudioStorageStub(), provider, Settings with { VideoEnabled = true },
-            clock ?? new EventTestTimeProvider { Now = Now }, storage);
+            clock ?? new EventTestTimeProvider { Now = Now }, storage, telemetry);
 }
