@@ -11,9 +11,9 @@ public sealed class MediaCleanupService(MediaRecoveryAccessService access, IMedi
     public async Task<MediaRecoveryBatchResult> ScanAsync(MediaRecoveryBatchCommand command,
         CancellationToken cancellationToken)
     {
-        if (!MediaRecoveryAccessService.IsValid(command)) return new("invalid_request", command.AfterId, 0, 0, 0, 0);
+        if (!MediaRecoveryAccessService.IsValid(command)) return new("MEDIA_RECOVERY_INVALID_ARGUMENT", command.AfterId, 0, 0, 0, 0);
         var principal = await access.FindOperatorAsync(cancellationToken);
-        if (principal is null) return new("forbidden", command.AfterId, 0, 0, 0, 0);
+        if (principal is null) return new("MEDIA_RECOVERY_FORBIDDEN", command.AfterId, 0, 0, 0, 0);
 
         var now = clock.GetUtcNow();
         var cutoff = now.AddHours(-24);
@@ -39,7 +39,7 @@ public sealed class MediaCleanupService(MediaRecoveryAccessService access, IMedi
         }
 
         var next = candidates.Count == 0 ? command.AfterId : candidates[^1].Id;
-        return new(command.Apply ? "applied" : "preview", next, candidates.Count, changed, rejected, deferred);
+        return new("OK", next, candidates.Count, changed, rejected, deferred);
     }
 
     private async Task<bool> TryDeleteAsync(MediaCleanupObjectModel candidate, MediaRecoveryAuditModel entry,

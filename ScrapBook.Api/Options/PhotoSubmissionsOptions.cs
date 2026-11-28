@@ -21,17 +21,8 @@ public sealed record PhotoSubmissionsOptions(bool Enabled, string Bucket, string
         }
         if (!enabled) return new(false, "", "", "", null, null, null, false, false, DefaultVideoProbe);
         if (!submissionsEnabled) throw new StartupConfigurationException(Section);
-        var bucket = section["Bucket"];
-        if (bucket is not { Length: >= 3 and <= 63 } || !IsLetterOrDigit(bucket[0]) || !IsLetterOrDigit(bucket[^1])
-            || !bucket.All(character => IsLetterOrDigit(character) || character is '.' or '-'))
-        {
-            throw new StartupConfigurationException(Section);
-        }
-        var region = section["Region"];
-        if (region is not { Length: > 0 and <= 32 } || !region.All(character => IsLetterOrDigit(character) || character == '-'))
-        {
-            throw new StartupConfigurationException(Section);
-        }
+        var bucket = RequireBucket(section["Bucket"]);
+        var region = RequireRegion(section["Region"]);
         var queue = RequireUrl(section["QueueUrl"], development);
         var storageEndpoint = ReadEndpoint(section["StorageServiceUrl"], development);
         var queueEndpoint = ReadEndpoint(section["QueueServiceUrl"], development);
@@ -53,7 +44,26 @@ public sealed record PhotoSubmissionsOptions(bool Enabled, string Bucket, string
             videoEnabled, videoProbePath, audioEnabled);
     }
 
-    private static string? ReadEndpoint(string? value, bool development) => value is null
+    internal static string RequireBucket(string? value)
+    {
+        if (value is not { Length: >= 3 and <= 63 } || !IsLetterOrDigit(value[0]) || !IsLetterOrDigit(value[^1])
+            || !value.All(character => IsLetterOrDigit(character) || character is '.' or '-'))
+        {
+            throw new StartupConfigurationException(Section + ":Bucket");
+        }
+        return value;
+    }
+
+    internal static string RequireRegion(string? value)
+    {
+        if (value is not { Length: > 0 and <= 32 } || !value.All(character => IsLetterOrDigit(character) || character == '-'))
+        {
+            throw new StartupConfigurationException(Section + ":Region");
+        }
+        return value;
+    }
+
+    internal static string? ReadEndpoint(string? value, bool development) => value is null
         ? null : development ? RequireUrl(value, true) : throw new StartupConfigurationException(Section);
 
     private static string RequireUrl(string? value, bool development)
