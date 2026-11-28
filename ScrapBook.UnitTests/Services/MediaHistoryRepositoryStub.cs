@@ -13,7 +13,8 @@ internal sealed class MediaHistoryRepositoryStub : IMediaHistoryRepository
     public List<(long EventId, long RecordId, CancellationToken Token)> ReceiptReads { get; } = [];
     public List<(long FileId, string Kind, int ProfileVersion, CancellationToken Token)> WorkReads { get; } = [];
     public List<(MediaConfirmationModel Confirmation, int ProfileVersion, string Kind, string[] Variants,
-        DateTimeOffset Now, CancellationToken Token)> Jobs { get; } = [];
+        DateTimeOffset Now, CancellationToken Token)> Jobs
+    { get; } = [];
     public Dictionary<long, MediaSourceEntity> Sources { get; } = [];
     public MediaHistoryReceiptModel? Receipt { get; set; }
     public MediaHistoryWorkModel Work { get; set; } = new(null, null, null, null, false);

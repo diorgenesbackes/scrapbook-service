@@ -19,8 +19,11 @@ internal sealed class MediaCleanupS3ClientStub() : AmazonS3Client("test-access",
         cancellationToken.ThrowIfCancellationRequested();
         Lists.Add((new ListVersionsRequest
         {
-            BucketName = request.BucketName, Prefix = request.Prefix, MaxKeys = request.MaxKeys,
-            KeyMarker = request.KeyMarker, VersionIdMarker = request.VersionIdMarker
+            BucketName = request.BucketName,
+            Prefix = request.Prefix,
+            MaxKeys = request.MaxKeys,
+            KeyMarker = request.KeyMarker,
+            VersionIdMarker = request.VersionIdMarker
         }, cancellationToken));
         if (ListFailure is { } failure) return Task.FromException<ListVersionsResponse>(failure);
         return Task.FromResult(request.VersionIdMarker is { } marker ? FollowingPages[marker] : Page);

@@ -14,7 +14,8 @@ internal sealed class MediaPreparationRecoveryRepositoryStub : IMediaPreparation
     public List<(long EventId, long FileId, int ProfileVersion, bool Locked, CancellationToken Token)> JobReads { get; } = [];
     public List<(long EventId, long FileId, int ProfileVersion, CancellationToken Token)> VariantReads { get; } = [];
     public List<(long EventId, MediaRecoveryJobEntity Job, int ProfileVersion, int NextCycle, string[] Variants,
-        DateTimeOffset Now, CancellationToken Token)> Reopened { get; } = [];
+        DateTimeOffset Now, CancellationToken Token)> Reopened
+    { get; } = [];
 
     public Task<OutboxMessageEntity?> FindFactAsync(long eventId, Guid messageId, CancellationToken cancellationToken)
     {

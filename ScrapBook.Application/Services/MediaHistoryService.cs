@@ -148,8 +148,11 @@ public sealed class MediaHistoryService(IMediaHistoryRepository repository, IMed
         }
 
         var receipt = await repository.FindReceiptAsync(eventId, file.RecordId, cancellationToken);
-        if (receipt is not { Operation: "contribution.create", OperationState: "confirmed", SessionState: "confirmed",
-                CompletedAt: { } completedAt } || receipt.TerminalAt != completedAt || receipt.Format != source.Kind
+        if (receipt is not
+            {
+                Operation: "contribution.create", OperationState: "confirmed", SessionState: "confirmed",
+                CompletedAt: { } completedAt
+            } || receipt.TerminalAt != completedAt || receipt.Format != source.Kind
             || receipt.CorrelationId == Guid.Empty)
         {
             return (null, "MEDIA_HISTORY_RECEIPT_UNVERIFIED");

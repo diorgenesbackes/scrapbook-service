@@ -13,10 +13,11 @@ internal sealed class OutboxTestRepository : IOutboxRepository
     public Action<StructuralLockOutboxEntity, CancellationToken>? BeforeResult { get; set; }
     public EventWriteTestTransaction Transaction { get; private set; } = new();
     public List<(string Type, int Limit, Guid Lease, DateTimeOffset Now, DateTimeOffset Until, CancellationToken Token)> Claims
-        { get; } = [];
+    { get; } = [];
     public List<(Guid Id, Guid Lease, DateTimeOffset Now, CancellationToken Token)> Published { get; } = [];
     public List<(Guid Id, Guid Lease, bool Terminal, string ErrorCode, DateTimeOffset Now, DateTimeOffset AvailableAt,
-        CancellationToken Token)> Failures { get; } = [];
+        CancellationToken Token)> Failures
+    { get; } = [];
     public List<(StructuralLockOutboxEntity Message, CancellationToken Token)> Results { get; } = [];
     public List<(Guid Id, DateTimeOffset Now, CancellationToken Token)> Reopened { get; } = [];
 
