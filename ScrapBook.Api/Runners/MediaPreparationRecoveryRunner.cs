@@ -34,7 +34,11 @@ public static class MediaPreparationRecoveryRunner
         deadline.CancelAfter(TimeSpan.FromMinutes(2));
         try
         {
-            var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
+            var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+            {
+                DisableDefaults = true,
+                EnvironmentName = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT")
+            });
             builder.Configuration.AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
             builder.Configuration.AddEnvironmentVariables();
             builder.Logging.ClearProviders();
