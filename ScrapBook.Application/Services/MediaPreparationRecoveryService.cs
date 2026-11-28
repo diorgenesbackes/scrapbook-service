@@ -8,7 +8,7 @@ using static ScrapBook.Application.Services.MediaConfirmationService;
 namespace ScrapBook.Application.Services;
 
 public sealed class MediaPreparationRecoveryService(IMediaPreparationRecoveryRepository recovery, IMediaAdmissionRepository admission,
-    IMediaRecoveryAccessRepository audit, MediaRecoveryAccessService access, TimeProvider clock)
+    IMediaRecoveryAccessRepository audit, MediaRecoveryAccessService access, TimeProvider clock, MediaHistoryService history)
 {
     public static bool IsValid(MediaReopenCommand command) =>
         command.EventId > 0 && command.FileId > 0 && command.ProfileVersion > 0 && command.ExpectedCycle > 0
@@ -49,7 +49,9 @@ public sealed class MediaPreparationRecoveryService(IMediaPreparationRecoveryRep
         if (actor is null) return new("MEDIA_RECOVERY_FORBIDDEN", false);
 
         var row = await recovery.FindFactAsync(command.EventId, command.MessageId, cancellationToken);
-        var message = row is null ? null : MediaConfirmationCodec.ReadOutbox(row);
+        var message = row is null
+            ? await history.FindArchivedConfirmationAsync(command.EventId, command.MessageId, cancellationToken)
+            : MediaConfirmationCodec.ReadOutbox(row);
         var result = message is null
             ? new("MEDIA_REDRIVE_FACT_UNPROVEN", false)
             : await RedriveFactAsync(command, message, cancellationToken);
