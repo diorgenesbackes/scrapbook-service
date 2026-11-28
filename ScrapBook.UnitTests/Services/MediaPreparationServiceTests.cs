@@ -242,6 +242,57 @@ public sealed class MediaPreparationServiceTests
         Assert.Empty(file!.Variants);
     }
 
+    [Theory]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(false, false, false)]
+    public async Task GivesNewConfirmationsPriorityAndHonorsHistoricalCapacityAsync(bool newWork, bool allowHistorical,
+        bool takesHistory)
+    {
+        using var cancellation = new CancellationTokenSource();
+        repository.Eligible = newWork ? Job() : null;
+        repository.HistoricalEligible = Job() with { Id = Job().Id + 1 };
+
+        Assert.Equal(newWork || takesHistory, await Service.PrepareNextAsync(allowHistorical, cancellation.Token));
+
+        Assert.Equal((false, cancellation.Token), repository.EligibilityChecks[0]);
+        if (takesHistory)
+        {
+            Assert.Equal((true, cancellation.Token), repository.EligibilityChecks[1]);
+            Assert.Equal(repository.HistoricalEligible, Assert.Single(repository.Starts).Job);
+        }
+        else
+        {
+            Assert.Single(repository.EligibilityChecks);
+            if (newWork) Assert.Equal(repository.Eligible, Assert.Single(repository.Starts).Job);
+            else Assert.Empty(repository.Starts);
+        }
+    }
+
+    [Theory]
+    [InlineData("photo", "available", "available", "image", "thumbnail")]
+    [InlineData("photo", "available", "failed", "image", null)]
+    [InlineData("photo", "processing", "processing", "image", null)]
+    [InlineData("photo", "not_requested", "pending", "image", null)]
+    [InlineData("video", "available", "available", "playback", null)]
+    [InlineData("audio", "available", "available", "playback", null)]
+    [InlineData("video", "available", "failed", "image", null)]
+    public async Task ReturnsVersionedReferencesOnlyForACompleteReadyProfileAsync(string kind, string state, string expectedState,
+        string firstVariant, string? secondVariant)
+    {
+        var confirmation = MediaPreparationTestFixture.Confirmation;
+        var first = new MediaVariantReferenceModel(firstVariant, 801, "pinned-first-version", "image/jpeg");
+        var second = new MediaVariantReferenceModel(secondVariant ?? "", 802, "pinned-second-version", "image/jpeg");
+        MediaVariantReferenceModel[] variants = secondVariant is null ? [first] : [first, second];
+        repository.Projection = new(confirmation.FileId, state, 1, variants, kind);
+
+        var file = await Service.GetFileAsync(confirmation.EventId, confirmation.RecordId, confirmation.FileId, CancellationToken.None);
+
+        Assert.NotNull(file);
+        Assert.Equal((confirmation.FileId, kind, 1, expectedState), (file.FileId, file.Kind, file.ProfileVersion, file.State));
+        Assert.Equal(expectedState == "available" ? variants : [], file.Variants);
+    }
+
     private static void AssertPromotion(
         (PhotoPreparationWorkModel Work, PreparedPhotoVariantModel Variant, EventWriteTestTransaction Transaction) entry,
         string prefix, string kind, string version, EventWriteTestTransaction transaction)

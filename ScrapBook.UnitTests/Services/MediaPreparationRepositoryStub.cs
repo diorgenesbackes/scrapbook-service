@@ -7,6 +7,8 @@ namespace ScrapBook.UnitTests.Services;
 internal sealed class MediaPreparationRepositoryStub : IMediaPreparationRepository
 {
     public MediaJobEntity? Eligible { get; set; }
+    public MediaJobEntity? HistoricalEligible { get; set; }
+    public List<(bool Historical, CancellationToken Token)> EligibilityChecks { get; } = [];
     public MediaSourceEntity? Source { get; set; } = MediaPreparationTestFixture.Source();
     public bool RetainsLease { get; set; } = true;
     public MediaFileProjectionModel? Projection { get; set; }
@@ -35,7 +37,8 @@ internal sealed class MediaPreparationRepositoryStub : IMediaPreparationReposito
     public Task<MediaJobEntity?> FindEligiblePhotoAsync(DateTimeOffset now, bool historical, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(Eligible);
+        EligibilityChecks.Add((historical, cancellationToken));
+        return Task.FromResult(historical ? HistoricalEligible : Eligible);
     }
 
     public Task<MediaSourceEntity?> FindSourceAsync(MediaConfirmationModel message, bool lockFile, CancellationToken cancellationToken)
