@@ -20,6 +20,7 @@ public sealed class MediaPreparationRecoveryService(IMediaPreparationRecoveryRep
 
     public async Task<MediaRecoveryResult> ReopenAsync(MediaReopenCommand command, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!IsValid(command)) return new("MEDIA_RECOVERY_INVALID_ARGUMENT", false);
 
         await using var transaction = await admission.BeginAsync(cancellationToken);
@@ -31,7 +32,7 @@ public sealed class MediaPreparationRecoveryService(IMediaPreparationRecoveryRep
             ? new("MEDIA_REOPEN_JOB_NOT_FOUND", false)
             : await ReopenJobAsync(command, job, cancellationToken);
         var applied = result.Succeeded && command.Apply;
-        await audit.AuditAsync(new(actor, command.EventId, job?.FileId, "media.reopen",
+        await audit.AuditAsync(new(actor, command.EventId, command.FileId, "media.reopen",
             result.Succeeded ? "success" : "rejected", result.Code, command.Incident, command.Revision,
             Guid.NewGuid(), applied ? command.ExpectedCycle + 1 : job?.RetryCycle), cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -40,6 +41,7 @@ public sealed class MediaPreparationRecoveryService(IMediaPreparationRecoveryRep
 
     public async Task<MediaRecoveryResult> RedriveAsync(MediaRedriveCommand command, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!IsValid(command)) return new("MEDIA_RECOVERY_INVALID_ARGUMENT", false);
 
         await using var transaction = await admission.BeginAsync(cancellationToken);
