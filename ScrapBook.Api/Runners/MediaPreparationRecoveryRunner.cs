@@ -1,6 +1,8 @@
 using System.Data.Common;
 using System.Globalization;
 using System.Text.Json;
+using Amazon;
+using Amazon.S3;
 using Microsoft.EntityFrameworkCore;
 using ScrapBook.Api.Options;
 using ScrapBook.Application.Services;
@@ -10,6 +12,7 @@ using ScrapBook.Domain.Interfaces;
 using ScrapBook.Domain.Models;
 using ScrapBook.Infrastructure.Persistence;
 using ScrapBook.Infrastructure.Repositories;
+using ScrapBook.Infrastructure.Storage;
 
 namespace ScrapBook.Api.Runners;
 
@@ -44,12 +47,14 @@ public static class MediaPreparationRecoveryRunner
             var database = DatabaseOptions.ForMediaRecovery(builder.Configuration);
             builder.Services.AddDbContext<ScrapBookDbContext>(options => options.UseNpgsql(database.ConnectionString));
             Register(builder.Services);
+            if (mode == "cleanup") RegisterCleanup(builder);
             using var host = builder.Build();
             await using var scope = host.Services.CreateAsyncScope();
-            return await ExecuteAsync(command, scope.ServiceProvider, deadline.Token);
+            return await ExecuteAsync(mode, command, scope.ServiceProvider, deadline.Token);
         }
         catch (Exception error) when (error is StartupConfigurationException or PostgresUnavailableException
-            or PostgresWriteRejectedException or MediaPreparationWriteException or DbException or IOException)
+            or PostgresWriteRejectedException or MediaPreparationWriteException or DbException or IOException
+            or Amazon.Runtime.AmazonClientException)
         {
             return WriteCode("MEDIA_RECOVERY_UNAVAILABLE", 4);
         }
@@ -73,17 +78,48 @@ public static class MediaPreparationRecoveryRunner
         services.AddScoped<MediaHistoryService>();
     }
 
+    private static void RegisterCleanup(HostApplicationBuilder builder)
+    {
+        var settings = builder.Configuration.GetSection("PhotoSubmissions");
+        var bucket = PhotoSubmissionsOptions.RequireBucket(settings["Bucket"]);
+        var region = PhotoSubmissionsOptions.RequireRegion(settings["Region"]);
+        var development = builder.Environment.IsDevelopment();
+        var endpoint = PhotoSubmissionsOptions.ReadEndpoint(settings["StorageServiceUrl"], development);
+        var config = new AmazonS3Config { IgnoreConfiguredEndpointUrls = true };
+        if (endpoint is null)
+        {
+            config.RegionEndpoint = RegionEndpoint.GetBySystemName(region);
+        }
+        else
+        {
+            config.ForcePathStyle = true;
+            config.ServiceURL = endpoint;
+            config.AuthenticationRegion = region;
+        }
+
+        builder.Services.AddSingleton<IAmazonS3>(_ => new AmazonS3Client(config));
+        builder.Services.AddSingleton<IMediaCleanupStorage, S3MediaCleanupStorage>();
+        builder.Services.AddScoped<IMediaCleanupRepository, MediaCleanupRepository>();
+        builder.Services.AddScoped(services => new MediaCleanupService(
+            services.GetRequiredService<MediaRecoveryAccessService>(), services.GetRequiredService<IMediaRecoveryAccessRepository>(),
+            services.GetRequiredService<IMediaCleanupRepository>(), services.GetRequiredService<IMediaCleanupStorage>(),
+            services.GetRequiredService<TimeProvider>(), bucket));
+    }
+
     private static object? ReadCommand(string mode, string[] parameters, bool apply) => mode switch
     {
-        "history" => ReadBatchCommand(parameters, apply),
+        "history" or "cleanup" => ReadBatchCommand(parameters, apply),
         "redrive" => ReadRedriveCommand(parameters, apply),
         "reopen" => ReadReopenCommand(parameters, apply),
         _ => null
     };
 
-    private static async Task<int> ExecuteAsync(object command, IServiceProvider services, CancellationToken cancellationToken) =>
+    private static async Task<int> ExecuteAsync(string mode, object command, IServiceProvider services,
+        CancellationToken cancellationToken) =>
         command switch
         {
+            MediaRecoveryBatchCommand batch when mode == "cleanup" => WriteBatch(await services.GetRequiredService<MediaCleanupService>()
+                .ScanAsync(batch, cancellationToken)),
             MediaRecoveryBatchCommand batch => WriteBatch(await services.GetRequiredService<MediaHistoryService>()
                 .ScanAsync(batch, cancellationToken)),
             MediaRedriveCommand redrive => WriteResult(await services.GetRequiredService<MediaPreparationRecoveryService>()
