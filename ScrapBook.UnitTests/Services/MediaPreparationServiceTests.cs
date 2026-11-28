@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using ScrapBook.Application.Diagnostics;
 using ScrapBook.Application.Services;
 using ScrapBook.Domain.Entities;
 using ScrapBook.Domain.Exceptions;
@@ -78,6 +79,95 @@ public sealed class MediaPreparationServiceTests
         Assert.Equal((start.Lease, start.Job.Version + 1, start.Prefix, cancellation.Token),
             (leaseCheck.Work.Lease, leaseCheck.Work.Job.Version, leaseCheck.Work.OutputPrefix, leaseCheck.Token));
         Assert.Empty(repository.Failures);
+    }
+
+    [Theory]
+    [InlineData(-1, 1L, false)]
+    [InlineData(0, 1L, true)]
+    [InlineData(1, 0L, false)]
+    public async Task RecordsReadinessOnlyAfterTheCommitOfBothPhotoVariantsAsync(int offsetMilliseconds, long withinTarget,
+        bool isHistorical)
+    {
+        var telemetry = new MediaProcessingTelemetry();
+        var job = Job();
+        var confirmedAt = job.ConfirmedAt;
+        var admittedAt = confirmedAt.AddSeconds(50);
+        job = job with { IsHistorical = isHistorical, AdmittedAt = admittedAt };
+        repository.Eligible = isHistorical ? null : job;
+        repository.HistoricalEligible = isHistorical ? job : null;
+        var start = isHistorical ? admittedAt : confirmedAt;
+        clock.Now = start.AddSeconds(295);
+        var readySeconds = 300 + offsetMilliseconds / 1000.0;
+        repository.BeforeCommitAsync = _ =>
+        {
+            Assert.DoesNotContain(telemetry.CollectInterval(), measurement => measurement.Stage == "ready");
+            if (repository.Promotions.Count == 2) clock.Now = start.AddMilliseconds(300_000 + offsetMilliseconds);
+            return Task.CompletedTask;
+        };
+        var service = new MediaPreparationService(repository, storage, processor, clock, telemetry: telemetry);
+
+        Assert.True(await service.PrepareNextAsync(CancellationToken.None));
+
+        var ready = Assert.Single(telemetry.CollectInterval(), measurement => measurement.Stage == "ready");
+        Assert.Equal(("photo", isHistorical ? "historical" : "recent", "available"), (ready.MediaType, ready.Cohort, ready.Outcome));
+        Assert.Equal(1, ready.SampleCount);
+        Assert.Equal(readySeconds, ready.DurationSumSeconds, 6);
+        Assert.Equal(readySeconds, ready.DurationMaximumSeconds, 6);
+        Assert.Equal(withinTarget, ready.WithinTargetCount);
+        Assert.Equal(withinTarget, ready.DurationBuckets["300"]);
+        Assert.Equal(0, ready.DurationBuckets["120"]);
+        Assert.Equal(1, ready.DurationBuckets["600"]);
+        Assert.Equal(1, ready.DurationBuckets["+Inf"]);
+        Assert.Empty(telemetry.CollectInterval());
+    }
+
+    [Fact]
+    public async Task DoesNotRecordReadinessWhenTheAvailabilityCommitFailsAsync()
+    {
+        var telemetry = new MediaProcessingTelemetry();
+        repository.BeforeCommitAsync = _ => repository.Promotions.Count == 2
+            ? Task.FromException(new PostgresUnavailableException())
+            : Task.CompletedTask;
+        var service = new MediaPreparationService(repository, storage, processor, clock, telemetry: telemetry);
+
+        await Assert.ThrowsAsync<PostgresUnavailableException>(() => service.PrepareNextAsync(CancellationToken.None));
+
+        Assert.False(Assert.Single(repository.States).Transaction.Committed);
+        Assert.DoesNotContain(telemetry.CollectInterval(), measurement => measurement.Stage == "ready");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReportsATerminalFailureWithoutTreatingAPendingRetryAsReadyOrFailedAsync(bool terminal)
+    {
+        var telemetry = new MediaProcessingTelemetry();
+        if (terminal)
+        {
+            storage.Original = [0];
+        }
+        else
+        {
+            storage.VerifyAsync = (_, _, _) => Task.FromException<MediaStoredVariantModel>(new MediaVariantStorageException());
+        }
+        var service = new MediaPreparationService(repository, storage, processor, clock, telemetry: telemetry);
+
+        Assert.True(await service.PrepareNextAsync(CancellationToken.None));
+
+        var measurements = telemetry.CollectInterval();
+        Assert.DoesNotContain(measurements, measurement => measurement.Stage == "ready");
+        var terminalFailures = measurements.Where(measurement => measurement.Stage == "failure" && measurement.Outcome == "failed");
+        if (terminal)
+        {
+            var failed = Assert.Single(terminalFailures);
+            Assert.Equal(("photo", "recent", 1L, 0L), (failed.MediaType, failed.Cohort, failed.SampleCount, failed.WithinTargetCount));
+            Assert.True(Assert.Single(repository.States).Transaction.Committed);
+        }
+        else
+        {
+            Assert.Empty(terminalFailures);
+            Assert.Equal("pending", Assert.Single(repository.States).JobState);
+        }
     }
 
     [Theory]

@@ -39,7 +39,41 @@ public sealed class MediaProcessingOptionsTests
         var options = MediaProcessingOptions.FromConfiguration(Enabled(), false, Photos(true, Region), StructuralLock(false));
 
         Assert.True(options.Enabled);
+        Assert.False(options.Paused);
         Assert.Equal(MediaQueue, options.QueueUrl);
+    }
+
+    [Theory]
+    [InlineData("true", "true", true, true)]
+    [InlineData("true", "false", true, false)]
+    [InlineData("false", "true", false, true)]
+    public void ReadsTheAcquisitionPauseIndependentlyOfFeatureEnablement(string enabledValue, string pausedValue,
+        bool enabled, bool paused)
+    {
+        var configuration = Enabled();
+        configuration["MediaProcessing:Enabled"] = enabledValue;
+        configuration["MediaProcessing:Paused"] = pausedValue;
+
+        var options = MediaProcessingOptions.FromConfiguration(configuration, false, Photos(true, Region), StructuralLock(false));
+
+        Assert.Equal(enabled, options.Enabled);
+        Assert.Equal(paused, options.Paused);
+    }
+
+    [Theory]
+    [InlineData("true", "1")]
+    [InlineData("false", "enable")]
+    [InlineData("true", "")]
+    public void RejectsAnInvalidAcquisitionPauseAtStartup(string enabled, string pause)
+    {
+        var configuration = Enabled();
+        configuration["MediaProcessing:Enabled"] = enabled;
+        configuration["MediaProcessing:Paused"] = pause;
+
+        var error = Assert.Throws<StartupConfigurationException>(() => MediaProcessingOptions.FromConfiguration(
+            configuration, false, Photos(true, Region), StructuralLock(false)));
+
+        Assert.Equal("MediaProcessing:Paused", error.OptionName);
     }
 
     [Theory]

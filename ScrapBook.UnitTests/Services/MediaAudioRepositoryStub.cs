@@ -42,7 +42,8 @@ internal sealed class MediaAudioRepositoryStub : IMediaAudioRepository
         return Task.FromResult<IEventTransaction>(transaction);
     }
 
-    public Task<MediaJobEntity?> FindEligibleAudioAsync(DateTimeOffset now, bool historical, CancellationToken cancellationToken)
+    public Task<MediaJobEntity?> FindEligibleAudioAsync(DateTimeOffset now, bool historical, bool reconciliationOnly,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         EligibilityChecks.Add((historical, cancellationToken));
