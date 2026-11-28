@@ -1,9 +1,11 @@
+using ScrapBook.Api.Options;
 using ScrapBook.Application.Services;
 using ScrapBook.Domain.Exceptions;
 
 namespace ScrapBook.Api.Workers;
 
-public sealed class MediaAudioPreparationWorker(IServiceScopeFactory scopes, ILogger<MediaAudioPreparationWorker> logger) : BackgroundService
+public sealed class MediaAudioPreparationWorker(IServiceScopeFactory scopes, MediaProcessingOptions options,
+    ILogger<MediaAudioPreparationWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -25,7 +27,7 @@ public sealed class MediaAudioPreparationWorker(IServiceScopeFactory scopes, ILo
                     var service = scope.ServiceProvider.GetRequiredService<MediaAudioPreparationService>();
                     var preferHistorical = allowHistorical && round == 0;
                     round = (round + 1) % 3;
-                    if (!await service.PrepareNextAsync(allowHistorical, preferHistorical, cancellationToken))
+                    if (!await service.PrepareNextAsync(allowHistorical, preferHistorical, options.Paused, cancellationToken))
                     {
                         await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
                     }

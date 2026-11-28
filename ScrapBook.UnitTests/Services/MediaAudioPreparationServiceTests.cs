@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ScrapBook.Application.Diagnostics;
 using ScrapBook.Application.Services;
 using ScrapBook.Domain.Exceptions;
 using ScrapBook.Domain.Models;
@@ -95,8 +96,10 @@ public sealed class MediaAudioPreparationServiceTests
         Assert.Equal(ProviderJobId, repository.Attempt!.ProviderJobId);
     }
 
-    [Fact]
-    public async Task LostCreateResponseKeepsOneAttemptAndEarlyCallbackVerifiesOutputOnceAsync()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LostCreateResponseKeepsOneAttemptAndEarlyCallbackVerifiesOutputOnceAsync(bool reconciliationOnly)
     {
         using var cancellation = new CancellationTokenSource();
         var repository = new MediaAudioRepositoryStub();
@@ -111,7 +114,8 @@ public sealed class MediaAudioPreparationServiceTests
                 return Task.FromResult<MediaProviderJobModel?>(ProviderJob(repository.Attempt!.RequestKey, "complete", request.OutputKey));
             }
         };
-        var service = Service(repository, storage, provider);
+        var telemetry = new MediaProcessingTelemetry();
+        var service = Service(repository, storage, provider, telemetry);
 
         Assert.True(await service.PrepareNextAsync(cancellation.Token));
 
@@ -125,8 +129,9 @@ public sealed class MediaAudioPreparationServiceTests
         Assert.False(await service.WakeAsync(Callback(submitted.RequestKey), cancellation.Token));
         Assert.Single(repository.Wakes);
         Assert.Empty(storage.Verified);
+        Assert.DoesNotContain(telemetry.CollectInterval(), measurement => measurement.Stage == "ready");
 
-        Assert.True(await service.PrepareNextAsync(cancellation.Token));
+        Assert.True(await service.PrepareNextAsync(true, false, reconciliationOnly, cancellation.Token));
 
         var promotion = Assert.Single(repository.Promotions);
         var transition = Assert.Single(repository.States, state => state.FileState == "available");
@@ -139,6 +144,10 @@ public sealed class MediaAudioPreparationServiceTests
         Assert.False(await service.PrepareNextAsync(cancellation.Token));
         Assert.Single(repository.Promotions);
         Assert.Single(provider.Submissions);
+        var ready = Assert.Single(telemetry.CollectInterval(), measurement => measurement.Stage == "ready");
+        Assert.Equal(("audio", "recent", "available", 1L), (ready.MediaType, ready.Cohort, ready.Outcome, ready.SampleCount));
+        Assert.Equal(10, ready.DurationSumSeconds);
+        Assert.Equal(1, ready.WithinTargetCount);
     }
 
     [Theory]
@@ -172,6 +181,43 @@ public sealed class MediaAudioPreparationServiceTests
         Assert.Equal(submittedAt, repository.Attempt!.SubmittedAt);
         Assert.Equal("unknown", repository.Attempt.State);
         Assert.Equal("reconciling", repository.Job!.State);
+        Assert.Empty(repository.Failures);
+    }
+
+    [Fact]
+    public async Task ReconciliationOnlyLooksUpAnUncertainSubmissionWithoutResubmittingAsync()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var repository = InFlight(Now.AddSeconds(-5));
+        var storage = new MediaAudioStorageStub();
+        var provider = new MediaTranscodingProviderStub();
+
+        Assert.True(await Service(repository, storage, provider).PrepareNextAsync(true, false, true, cancellation.Token));
+
+        Assert.Equal(RequestKey, Assert.Single(provider.Searches).Request.RequestKey);
+        Assert.Empty(provider.Submissions);
+        Assert.Empty(storage.Staged);
+        Assert.Empty(repository.Starts);
+        Assert.Empty(repository.Failures);
+        Assert.Equal("reconciling", repository.Job!.State);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReconciliationOnlyDoesNotStartOrSubmitAnUnsubmittedAttemptAsync(bool attempted)
+    {
+        var repository = attempted ? InFlight(null) : new MediaAudioRepositoryStub();
+        var storage = new MediaAudioStorageStub();
+        var provider = new MediaTranscodingProviderStub();
+
+        Assert.False(await Service(repository, storage, provider).PrepareNextAsync(true, false, true, CancellationToken.None));
+
+        Assert.Empty(repository.Starts);
+        Assert.Empty(repository.Submissions);
+        Assert.Empty(storage.Staged);
+        Assert.Empty(provider.Submissions);
+        Assert.Empty(provider.Searches);
         Assert.Empty(repository.Failures);
     }
 
@@ -604,5 +650,6 @@ public sealed class MediaAudioPreparationServiceTests
     }
 
     private static MediaAudioPreparationService Service(MediaAudioRepositoryStub repository, MediaAudioStorageStub storage,
-        MediaTranscodingProviderStub provider) => new(repository, storage, provider, Settings, new EventTestTimeProvider { Now = Now });
+        MediaTranscodingProviderStub provider, MediaProcessingTelemetry? telemetry = null) =>
+        new(repository, storage, provider, Settings, new EventTestTimeProvider { Now = Now }, telemetry: telemetry);
 }

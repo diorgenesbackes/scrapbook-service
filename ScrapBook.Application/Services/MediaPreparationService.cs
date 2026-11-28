@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using ScrapBook.Application.Diagnostics;
 using ScrapBook.Domain.Entities;
 using ScrapBook.Domain.Exceptions;
 using ScrapBook.Domain.Interfaces;
@@ -9,7 +11,7 @@ using static ScrapBook.Application.Services.MediaConfirmationService;
 namespace ScrapBook.Application.Services;
 
 public sealed class MediaPreparationService(IMediaPreparationRepository repository, IMediaVariantStorage storage,
-    IPhotoVariantProcessor processor, TimeProvider clock)
+    IPhotoVariantProcessor processor, TimeProvider clock, MediaProcessingTelemetry? telemetry = null)
 {
     private const int MaximumAttempts = 5;
     private const int MaximumOriginalBytes = 20_000_000;
@@ -77,6 +79,7 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
         {
             await FailPermanentlyAsync(job, "prepare", "MEDIA_ATTEMPTS_EXHAUSTED", now, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+            telemetry?.RecordFailure("photo", job.IsHistorical, "prepare");
             return (true, null);
         }
         var confirmation = Confirmation(job);
@@ -85,6 +88,7 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
         {
             await FailPermanentlyAsync(job, "prepare", "MEDIA_SOURCE_INTEGRITY", now, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+            telemetry?.RecordFailure("photo", job.IsHistorical, "prepare");
             return (true, null);
         }
 
@@ -96,11 +100,18 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
         var work = new PhotoPreparationWorkModel(job with { Version = job.Version + 1, AttemptCount = job.AttemptCount + 1 },
             input, attempt, lease, prefix);
         await transaction.CommitAsync(cancellationToken);
+        if (job.ActiveAttemptId is not null)
+        {
+            telemetry?.Record(MediaProcessingStage.Reconciliation, MediaProcessingOutcome.Interrupted, "photo", job.IsHistorical);
+        }
+        if (job.AttemptCount == 0) telemetry?.RecordFirstClaim(job, "photo", clock.GetUtcNow());
         return (true, work);
     }
 
     private async Task PrepareAsync(PhotoPreparationWorkModel work, CancellationToken cancellationToken)
     {
+        using var activity = MediaProcessingTelemetry.StartActivity(MediaProcessingStage.Preparation, ActivityKind.Internal);
+        var started = clock.GetTimestamp();
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         budget.CancelAfter(PreparationBudget);
         IReadOnlyList<PreparedPhotoVariantModel> results;
@@ -123,7 +134,7 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && budget.IsCancellationRequested)
         {
-            await FailAttemptAsync(work, "prepare", "MEDIA_PREPARATION_TIMEOUT", true, cancellationToken);
+            await FailAttemptAsync(work, "prepare", "MEDIA_PREPARATION_TIMEOUT", true, started, cancellationToken);
             return;
         }
         catch (Exception error) when (error is MediaSourceIntegrityException or PhotoContentInvalidException or PhotoDecoderBudgetException
@@ -139,7 +150,7 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
                 MediaOutputInvalidException => ("verify", "MEDIA_VARIANT_INVALID", false),
                 _ => ("verify", "MEDIA_STORAGE_UNAVAILABLE", true)
             };
-            await FailAttemptAsync(work, stage, code, retryable, cancellationToken);
+            await FailAttemptAsync(work, stage, code, retryable, started, cancellationToken);
             return;
         }
 
@@ -153,6 +164,9 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
         await repository.EndAttemptAsync(work.AttemptId, "succeeded", null, now, cancellationToken);
         await repository.SetPhotoStateAsync(work.Job, "completed", "available", null, null, null, now, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        telemetry?.RecordReady(work.Job, "photo", clock.GetUtcNow());
+        telemetry?.Record(MediaProcessingStage.Preparation, MediaProcessingOutcome.Available, "photo", work.Job.IsHistorical,
+            clock.GetElapsedTime(started).TotalSeconds);
     }
 
     private async Task<PreparedPhotoVariantModel> StoreAsync(PhotoPreparationWorkModel work, string kind,
@@ -170,14 +184,15 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
     }
 
     private async Task FailAttemptAsync(PhotoPreparationWorkModel work, string stage, string code,
-        bool retryable, CancellationToken cancellationToken)
+        bool retryable, long started, CancellationToken cancellationToken)
     {
         await using var transaction = await repository.BeginAsync(cancellationToken);
         var now = clock.GetUtcNow();
         if (!await repository.RetainPhotoLeaseAsync(work, now, cancellationToken)) return;
 
         await repository.EndAttemptAsync(work.AttemptId, "failed", code, now, cancellationToken);
-        if (retryable && work.Job.AttemptCount < MaximumAttempts)
+        var retry = retryable && work.Job.AttemptCount < MaximumAttempts;
+        if (retry)
         {
             var seconds = RetrySeconds[work.Job.AttemptCount - 1];
             var retryAt = now.AddSeconds(seconds + Random.Shared.NextDouble());
@@ -188,6 +203,9 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
             await FailPermanentlyAsync(work.Job, stage, retryable ? "MEDIA_ATTEMPTS_EXHAUSTED" : code, now, cancellationToken);
         }
         await transaction.CommitAsync(cancellationToken);
+        telemetry?.Record(MediaProcessingStage.Preparation, retry ? MediaProcessingOutcome.RetryScheduled : MediaProcessingOutcome.Failed,
+            "photo", work.Job.IsHistorical, clock.GetElapsedTime(started).TotalSeconds);
+        if (!retry) telemetry?.RecordFailure("photo", work.Job.IsHistorical, stage);
     }
 
     private async Task FailPermanentlyAsync(MediaJobEntity job, string stage, string code, DateTimeOffset now,

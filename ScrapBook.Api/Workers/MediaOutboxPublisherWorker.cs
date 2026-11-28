@@ -42,16 +42,16 @@ public sealed class MediaOutboxPublisherWorker(IServiceScopeFactory scopes, ILog
         var outcome = await scope.ServiceProvider.GetRequiredService<MediaOutboxPublisherService>().PublishAsync(row, cancellationToken);
         if (outcome is MediaOutboxPublishResult.Failed or MediaOutboxPublishResult.InvalidFact)
         {
-            logger.LogError("Media outbox publication terminated. {Outcome} {CorrelationId}", outcome, row.CorrelationId);
+            logger.LogError("Media outbox publication terminated. {Outcome}", outcome);
         }
         else if (outcome == MediaOutboxPublishResult.ReconciliationRequired)
         {
-            logger.LogError("Media outbox publication requires reconciliation. {ErrorCode} {CorrelationId}",
-                "MEDIA_PUBLISH_RECONCILIATION_REQUIRED", row.CorrelationId);
+            logger.LogError("Media outbox publication requires reconciliation. {ErrorCode}",
+                "MEDIA_PUBLISH_RECONCILIATION_REQUIRED");
         }
         else if (outcome is MediaOutboxPublishResult.RetryScheduled or MediaOutboxPublishResult.LeaseLost)
         {
-            logger.LogWarning("Media outbox publication will be reconciled. {Outcome} {CorrelationId}", outcome, row.CorrelationId);
+            logger.LogWarning("Media outbox publication will be reconciled. {Outcome}", outcome);
         }
     }
 }
