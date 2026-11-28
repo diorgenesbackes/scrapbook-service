@@ -15,27 +15,31 @@ public sealed class MediaAudioRepository(MediaPreparationRepository repository, 
     public Task InsertFailureAsync(MediaFailureEntity result, CancellationToken cancellationToken) =>
         repository.InsertFailureAsync(result, cancellationToken);
 
-    public Task<MediaJobEntity?> FindEligibleAudioAsync(DateTimeOffset now, bool historical, CancellationToken cancellationToken) =>
+    public Task<MediaJobEntity?> FindEligibleAudioAsync(DateTimeOffset now, bool historical, bool reconciliationOnly,
+        CancellationToken cancellationToken) =>
         repository.QueryAsync<MediaJobEntity>($"""
             SELECT j.id AS "Id", r.records_events_id AS "EventId", r.id AS "RecordId", f.id AS "FileId",
                 j.profile_version AS "ProfileVersion", j.version AS "Version", j.state AS "State",
                 j.attempt_count AS "AttemptCount", j.retry_cycle AS "RetryCycle",
                 j.confirmation_message_id AS "ConfirmationMessageId", j.confirmation_correlation_id AS "ConfirmationCorrelationId",
                 j.confirmed_at AS "ConfirmedAt", a.active_id AS "ActiveAttemptId", COALESCE(a.last_number, 0) AS "LastAttemptNumber",
-                j.profile::text AS "Profile", f.kind AS "FileKind"
+                j.profile::text AS "Profile", f.kind AS "FileKind", j.is_historical AS "IsHistorical",
+                j.created_at AS "AdmittedAt"
             FROM scrapbook.processing_jobs AS j
             JOIN scrapbook.files AS f ON f.id = j.processing_jobs_files_id AND f.profile_version = j.profile_version
             JOIN scrapbook.records AS r ON r.id = f.files_records_id
             CROSS JOIN LATERAL (
                 SELECT max(id) FILTER (WHERE state IN ('created', 'submitted', 'running', 'unknown')) AS active_id,
-                    max(number) AS last_number
+                    max(number) AS last_number,
+                    bool_or(state IN ('created', 'submitted', 'running', 'unknown')
+                        AND (provider_submit_started_at IS NOT NULL OR provider_job_id IS NOT NULL)) AS submitted
                 FROM scrapbook.processing_attempts
                 WHERE processing_attempts_processing_jobs_id = j.id
             ) AS a
             WHERE j.kind = 'av_transcode' AND (f.kind = 'audio' OR ({settings.VideoEnabled} AND f.kind = 'video'))
                 AND f.processing_state IN ('pending', 'processing')
                 AND j.state IN ('pending', 'running', 'reconciling') AND j.confirmed_at IS NOT NULL
-                AND j.is_historical = {historical}
+                AND j.is_historical = {historical} AND (NOT {reconciliationOnly} OR a.submitted)
                 AND j.next_attempt_at <= {now} AND (j.lease_until IS NULL OR j.lease_until <= {now})
             ORDER BY j.next_attempt_at, j.id
             LIMIT 1

@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using ScrapBook.Application.Codecs;
+using ScrapBook.Application.Diagnostics;
 using ScrapBook.Domain.Entities;
 using ScrapBook.Domain.Exceptions;
 using ScrapBook.Domain.Interfaces;
@@ -9,7 +11,7 @@ namespace ScrapBook.Application.Services;
 
 public sealed class MediaOutboxPublisherService(IOutboxRepository outbox, IOutboxPublisher publisher,
     IMediaAdmissionRepository admission, IMediaPreparationRepository preparation, TimeProvider clock,
-    DateTimeOffset? historicalBefore = null)
+    DateTimeOffset? historicalBefore = null, MediaProcessingTelemetry? telemetry = null)
 {
     private const int MaximumAttempts = 5;
     private const string InvalidFact = "MEDIA_PUBLISH_INVALID_FACT";
@@ -26,9 +28,32 @@ public sealed class MediaOutboxPublisherService(IOutboxRepository outbox, IOutbo
     public async Task<MediaOutboxPublishResult> PublishAsync(OutboxMessageEntity row, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (row.LeaseToken is not { } lease) return MediaOutboxPublishResult.LeaseLost;
-        var message = MediaConfirmationCodec.ReadOutbox(row);
+        using var activity = MediaProcessingTelemetry.StartActivity(MediaProcessingStage.Publish, ActivityKind.Producer);
+        var started = clock.GetTimestamp();
+        var message = row.LeaseToken is null ? null : MediaConfirmationCodec.ReadOutbox(row);
         var source = message is null ? null : await admission.FindSourceAsync(message, false, cancellationToken);
+        var outcome = row.LeaseToken is { } lease
+            ? await PublishAsync(row, lease, message, source, cancellationToken)
+            : MediaOutboxPublishResult.LeaseLost;
+        bool? historical = message is null ? null : message.ConfirmedAt < historicalBefore;
+        var kind = source?.Kind;
+        telemetry?.Record(MediaProcessingStage.Publish, PublicationOutcome(outcome), kind, historical,
+            clock.GetElapsedTime(started).TotalSeconds);
+        if (outcome == MediaOutboxPublishResult.Published && message is not null)
+        {
+            telemetry?.Record(MediaProcessingStage.PublicationWait, MediaProcessingOutcome.Published, kind, historical,
+                (clock.GetUtcNow() - message.ConfirmedAt).TotalSeconds);
+        }
+        if (outcome == MediaOutboxPublishResult.Failed && kind is not null && historical is { } cohort)
+        {
+            telemetry?.RecordFailure(kind, cohort, "publish");
+        }
+        return outcome;
+    }
+
+    private async Task<MediaOutboxPublishResult> PublishAsync(OutboxMessageEntity row, Guid lease,
+        MediaConfirmationModel? message, MediaSourceEntity? source, CancellationToken cancellationToken)
+    {
         if (message is null || !MatchesSource(message, source))
         {
             return await RegisterFailureAsync(row, lease, null, false, InvalidFact, cancellationToken);
@@ -99,6 +124,16 @@ public sealed class MediaOutboxPublisherService(IOutboxRepository outbox, IOutbo
         await transaction.CommitAsync(cancellationToken);
         return terminal;
     }
+
+    private static MediaProcessingOutcome PublicationOutcome(MediaOutboxPublishResult outcome) => outcome switch
+    {
+        MediaOutboxPublishResult.Published => MediaProcessingOutcome.Published,
+        MediaOutboxPublishResult.RetryScheduled => MediaProcessingOutcome.RetryScheduled,
+        MediaOutboxPublishResult.Failed => MediaProcessingOutcome.Failed,
+        MediaOutboxPublishResult.InvalidFact => MediaProcessingOutcome.InvalidFact,
+        MediaOutboxPublishResult.ReconciliationRequired => MediaProcessingOutcome.ReconciliationRequired,
+        _ => MediaProcessingOutcome.LeaseLost
+    };
 
     private static MediaOutboxPublishResult TerminalResult(OutboxMessageEntity row, MediaConfirmationModel? message,
         MediaSourceEntity? source, ProcessedMessageEntity? delivery, bool retryable)

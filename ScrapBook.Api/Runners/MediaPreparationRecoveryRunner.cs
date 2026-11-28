@@ -48,6 +48,11 @@ public static class MediaPreparationRecoveryRunner
             }
             if (!enabled) return WriteCode("MEDIA_RECOVERY_DISABLED", 3);
 
+            if (apply && mode is ("history" or "redrive") && MediaProcessingOptions.ReadPaused(builder.Configuration))
+            {
+                return WriteCode("MEDIA_RECOVERY_ADMISSION_PAUSED", 3);
+            }
+
             var historyBefore = MediaHistoryOptions.ReadCutoff(builder.Configuration);
             if (mode == "history" && command is MediaRecoveryBatchCommand historical)
             {

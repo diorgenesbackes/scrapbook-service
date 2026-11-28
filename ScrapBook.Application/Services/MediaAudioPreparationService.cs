@@ -1,7 +1,8 @@
-using System.Diagnostics.Metrics;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using ScrapBook.Application.Diagnostics;
 using ScrapBook.Domain.Entities;
 using ScrapBook.Domain.Exceptions;
 using ScrapBook.Domain.Interfaces;
@@ -11,7 +12,8 @@ using static ScrapBook.Application.Services.MediaConfirmationService;
 namespace ScrapBook.Application.Services;
 
 public sealed class MediaAudioPreparationService(IMediaAudioRepository repository, IMediaAudioStorage storage,
-    IMediaTranscodingProvider provider, MediaAudioSettings settings, TimeProvider clock, IMediaVideoStorage? videoStorage = null)
+    IMediaTranscodingProvider provider, MediaAudioSettings settings, TimeProvider clock, IMediaVideoStorage? videoStorage = null,
+    MediaProcessingTelemetry? telemetry = null)
 {
     private const int MaximumAttempts = 5;
     private const int MaximumOriginalBytes = 50_000_000;
@@ -27,10 +29,6 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
     private static readonly TimeSpan ProviderBudget = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan SubmitWindow = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan ReconciliationHorizon = TimeSpan.FromHours(24);
-    private static readonly Meter AudioMeter = new("ScrapBook.MediaAudio");
-    private static readonly Meter VideoMeter = new("ScrapBook.MediaVideo");
-    private static readonly Counter<long> AudioInterventions = AudioMeter.CreateCounter<long>("scrapbook.media.audio.intervention");
-    private static readonly Counter<long> VideoInterventions = VideoMeter.CreateCounter<long>("scrapbook.media.video.intervention");
 
     public Task<bool> PrepareNextAsync(CancellationToken cancellationToken) =>
         PrepareNextAsync(true, cancellationToken);
@@ -38,12 +36,16 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
     public Task<bool> PrepareNextAsync(bool allowHistorical, CancellationToken cancellationToken) =>
         PrepareNextAsync(allowHistorical, false, cancellationToken);
 
-    public async Task<bool> PrepareNextAsync(bool allowHistorical, bool preferHistorical, CancellationToken cancellationToken)
+    public Task<bool> PrepareNextAsync(bool allowHistorical, bool preferHistorical, CancellationToken cancellationToken) =>
+        PrepareNextAsync(allowHistorical, preferHistorical, false, cancellationToken);
+
+    public async Task<bool> PrepareNextAsync(bool allowHistorical, bool preferHistorical, bool reconciliationOnly,
+        CancellationToken cancellationToken)
     {
-        var claim = await ClaimAsync(allowHistorical, preferHistorical, cancellationToken);
+        var claim = await ClaimAsync(allowHistorical, preferHistorical, reconciliationOnly, cancellationToken);
         if (claim.Work is { } work)
         {
-            await AdvanceAsync(work, cancellationToken);
+            await AdvanceAsync(work, reconciliationOnly, cancellationToken);
         }
         return claim.Found;
     }
@@ -78,15 +80,15 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
     }
 
     private async Task<(bool Found, MediaAudioWorkModel? Work)> ClaimAsync(bool allowHistorical, bool preferHistorical,
-        CancellationToken cancellationToken)
+        bool reconciliationOnly, CancellationToken cancellationToken)
     {
         await using var transaction = await repository.BeginAsync(cancellationToken);
         var now = clock.GetUtcNow();
         var historicalFirst = allowHistorical && preferHistorical;
-        var job = await repository.FindEligibleAudioAsync(now, historicalFirst, cancellationToken);
+        var job = await repository.FindEligibleAudioAsync(now, historicalFirst, reconciliationOnly, cancellationToken);
         if (job is null && allowHistorical)
         {
-            job = await repository.FindEligibleAudioAsync(now, !historicalFirst, cancellationToken);
+            job = await repository.FindEligibleAudioAsync(now, !historicalFirst, reconciliationOnly, cancellationToken);
         }
         if (job is null || !CanProcessFile(job.FileKind)) return (false, null);
 
@@ -101,22 +103,26 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
 
         var lease = Guid.NewGuid();
         var leaseUntil = now + LeaseDuration;
+        var firstClaim = job.ActiveAttemptId is null && job.AttemptCount == 0;
         MediaAudioAttemptEntity attempt;
         MediaAudioPlanModel plan;
         if (job.ActiveAttemptId is { } attemptId)
         {
             attempt = await repository.FindAudioAttemptAsync(job.Id, attemptId, cancellationToken)
                 ?? throw new MediaPreparationWriteException();
+            if (reconciliationOnly && attempt.ProviderJobId is null && attempt.SubmittedAt is null) return (false, null);
             plan = ReadPlan(job.Profile);
             await repository.ResumeAudioAsync(job, lease, leaseUntil, now, cancellationToken);
         }
         else
         {
+            if (reconciliationOnly) return (false, null);
             if (source is null || job.AttemptCount >= MaximumAttempts)
             {
                 var errorCode = source is null ? "MEDIA_SOURCE_INTEGRITY" : "MEDIA_ATTEMPTS_EXHAUSTED";
                 await FailPermanentlyAsync(job, "prepare", errorCode, now, cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
+                telemetry?.RecordFailure(job.FileKind, job.IsHistorical, "prepare");
                 return (true, null);
             }
             var requestKey = Guid.NewGuid();
@@ -130,11 +136,13 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             job = job with { AttemptCount = job.AttemptCount + 1, LastAttemptNumber = number, ActiveAttemptId = newId };
         }
         await transaction.CommitAsync(cancellationToken);
+        if (firstClaim) telemetry?.RecordFirstClaim(job, job.FileKind, clock.GetUtcNow());
         return (true, new(job with { Version = job.Version + 1 }, source, attempt, lease, leaseUntil, plan));
     }
 
-    private async Task AdvanceAsync(MediaAudioWorkModel work, CancellationToken cancellationToken)
+    private async Task AdvanceAsync(MediaAudioWorkModel work, bool reconciliationOnly, CancellationToken cancellationToken)
     {
+        using var activity = MediaProcessingTelemetry.StartActivity(MediaProcessingStage.Transcoding, ActivityKind.Internal);
         if (work.Plan.Settings.Account != settings.Account || work.Plan.Settings.Region != settings.Region)
         {
             await DeferAsync(work, null, "MEDIA_PROVIDER_SCOPE_CHANGED", cancellationToken);
@@ -159,9 +167,9 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
         }
         else if (work.Attempt.SubmittedAt is { } submittedAt)
         {
-            await ReconcileUnknownAsync(work, request, submittedAt, cancellationToken);
+            await ReconcileUnknownAsync(work, request, submittedAt, reconciliationOnly, cancellationToken);
         }
-        else
+        else if (!reconciliationOnly)
         {
             await SubmitAsync(work, request, cancellationToken);
         }
@@ -289,7 +297,7 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
     }
 
     private async Task ReconcileUnknownAsync(MediaAudioWorkModel work, MediaAudioRequestModel request,
-        DateTimeOffset submittedAt, CancellationToken cancellationToken)
+        DateTimeOffset submittedAt, bool reconciliationOnly, CancellationToken cancellationToken)
     {
         using var timeout = new CancellationTokenSource(ProviderBudget, clock);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
@@ -308,7 +316,7 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
         {
             await RecordProviderAsync(work, request, job, cancellationToken);
         }
-        else if (CanSubmit(clock.GetUtcNow(), work.LeaseUntil, submittedAt))
+        else if (!reconciliationOnly && CanSubmit(clock.GetUtcNow(), work.LeaseUntil, submittedAt))
         {
             await SubmitAsync(work, request, cancellationToken);
         }
@@ -406,6 +414,10 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             null, now, now, cancellationToken);
         await repository.SetAudioStateAsync(work.Job, "completed", "available", null, null, null, now, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        var observedAt = clock.GetUtcNow();
+        telemetry?.RecordReady(work.Job, work.Job.FileKind, observedAt);
+        telemetry?.Record(MediaProcessingStage.Transcoding, MediaProcessingOutcome.Available, work.Job.FileKind,
+            work.Job.IsHistorical, (observedAt - work.Attempt.StartedAt).TotalSeconds);
     }
 
     private async Task DeferAsync(MediaAudioWorkModel work, MediaProviderJobModel? providerJob, string? code,
@@ -440,10 +452,10 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
         await repository.SetAudioAttemptAsync(work.Attempt.Id, state, providerId, providerHash, errorCode, null, now, cancellationToken);
         await repository.ReleaseAudioLeaseAsync(work, jobState, errorCode, next, now, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        if (intervention)
-        {
-            (work.Job.FileKind == "video" ? VideoInterventions : AudioInterventions).Add(1);
-        }
+        var outcome = intervention ? MediaProcessingOutcome.InterventionRequired
+            : jobState == "running" ? MediaProcessingOutcome.Pending : MediaProcessingOutcome.Deferred;
+        telemetry?.Record(MediaProcessingStage.Reconciliation, outcome, work.Job.FileKind, work.Job.IsHistorical,
+            age.TotalSeconds);
     }
 
     private async Task FailAttemptAsync(MediaAudioWorkModel work, string stage, string code, bool retryable,
@@ -455,7 +467,8 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
         var providerId = work.Attempt.ProviderJobId;
         await repository.SetAudioAttemptAsync(work.Attempt.Id, "failed", providerId,
             providerId is null ? null : ProviderHash(work.Plan.Settings, providerId), code, now, now, cancellationToken);
-        if (retryable && work.Job.AttemptCount < MaximumAttempts)
+        var retry = retryable && work.Job.AttemptCount < MaximumAttempts;
+        if (retry)
         {
             var next = now.AddSeconds(RetrySeconds[work.Job.AttemptCount - 1] + Random.Shared.NextDouble());
             await repository.SetAudioStateAsync(work.Job, "pending", "processing", null, code, next, now, cancellationToken);
@@ -465,6 +478,9 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             await FailPermanentlyAsync(work.Job, stage, retryable ? "MEDIA_ATTEMPTS_EXHAUSTED" : code, now, cancellationToken);
         }
         await transaction.CommitAsync(cancellationToken);
+        telemetry?.Record(MediaProcessingStage.Transcoding, retry ? MediaProcessingOutcome.RetryScheduled : MediaProcessingOutcome.Failed,
+            work.Job.FileKind, work.Job.IsHistorical, (clock.GetUtcNow() - work.Attempt.StartedAt).TotalSeconds);
+        if (!retry) telemetry?.RecordFailure(work.Job.FileKind, work.Job.IsHistorical, stage);
     }
 
     private async Task FailPermanentlyAsync(MediaJobEntity job, string stage, string code, DateTimeOffset now,

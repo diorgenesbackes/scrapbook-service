@@ -1,13 +1,14 @@
 namespace ScrapBook.Api.Options;
 
 public sealed record MediaProcessingOptions(bool Enabled, string Region, string TopicArn, string QueueUrl,
-    string? SnsServiceUrl, string? SqsServiceUrl, DateTimeOffset? HistoricalBefore = null)
+    string? SnsServiceUrl, string? SqsServiceUrl, DateTimeOffset? HistoricalBefore = null, bool Paused = false)
 {
     public const string SectionName = "MediaProcessing";
 
     public static MediaProcessingOptions FromConfiguration(IConfiguration configuration, bool development,
         PhotoSubmissionsOptions photos, EventStructuralLockOptions structuralLock)
     {
+        var paused = ReadPaused(configuration);
         var options = SnsSqsOptions.FromConfiguration(configuration, SectionName, development);
         if (options.Enabled && (!photos.Enabled || photos.Region != options.Region))
         {
@@ -19,7 +20,14 @@ public sealed record MediaProcessingOptions(bool Enabled, string Region, string 
             throw new StartupConfigurationException(SectionName + ":QueueUrl");
         }
         return new(options.Enabled, options.Region, options.TopicArn, options.QueueUrl, options.SnsServiceUrl, options.SqsServiceUrl,
-            options.Enabled ? MediaHistoryOptions.ReadCutoff(configuration) : null);
+            options.Enabled ? MediaHistoryOptions.ReadCutoff(configuration) : null, paused);
+    }
+
+    internal static bool ReadPaused(IConfiguration configuration)
+    {
+        const string key = SectionName + ":Paused";
+        return bool.TryParse(configuration[key] ?? "false", out var paused)
+            ? paused : throw new StartupConfigurationException(key);
     }
 
     internal static bool SameQueue(string firstUrl, string secondUrl)
