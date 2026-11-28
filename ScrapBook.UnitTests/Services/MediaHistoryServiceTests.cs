@@ -9,7 +9,9 @@ public sealed class MediaHistoryServiceTests
 {
     private const string Revision = "cfe74b654125ebfc8fdf77f2d47c18702f26788b";
     private static readonly MediaConfirmationModel Confirmation = MediaPreparationTestFixture.Confirmation;
-    private static readonly MediaRecoveryBatchCommand Command = new(Confirmation.EventId, Confirmation.FileId - 1, 1, "INC-708", Revision, false);
+    private static readonly DateTimeOffset Activation = Confirmation.ConfirmedAt.AddDays(1);
+    private static readonly MediaRecoveryBatchCommand Command = new(Confirmation.EventId, Confirmation.FileId - 1, 1,
+        "INC-708", Revision, false, Activation);
     private readonly MediaHistoryRepositoryStub repository = new();
     private readonly MediaAdmissionRepositoryStub admission = new();
     private readonly OutboxTestRepository outbox = new() { Origin = MediaPreparationTestFixture.Outbox() };
@@ -36,8 +38,9 @@ public sealed class MediaHistoryServiceTests
         Assert.Equal(new MediaRecoveryBatchResult("OK", source.FileId, 1, 0, 0, 1), page);
         Assert.Equal(new MediaRecoveryBatchResult("OK", next.FileId, 1, 0, 0, 1), second);
         Assert.Equal(new MediaRecoveryBatchResult("OK", next.FileId, 0, 0, 0, 0), exhausted);
-        Assert.Equal([(Command.EventId, Command.AfterId, 1, cancellation.Token),
-            (Command.EventId, source.FileId, 1, cancellation.Token), (Command.EventId, next.FileId, 1, cancellation.Token)], repository.Pages);
+        Assert.Equal([(Command.EventId, Command.AfterId, 1, Activation, cancellation.Token),
+            (Command.EventId, source.FileId, 1, Activation, cancellation.Token),
+            (Command.EventId, next.FileId, 1, Activation, cancellation.Token)], repository.Pages);
         Assert.Equal([(source.EventId, source.RecordId, source.FileId, false, cancellation.Token),
             (next.EventId, next.RecordId, next.FileId, false, cancellation.Token)], repository.SourceReads);
         Assert.Empty(admission.Transactions);
@@ -134,6 +137,65 @@ public sealed class MediaHistoryServiceTests
         Assert.Single(audit.Entries);
     }
 
+    [Fact]
+    public async Task PreviewsThenRestoresMissingDeliveryOnlyForAProvenHistoricalEffectAsync()
+    {
+        repository.Work = EstablishedWork() with { HasVariants = true };
+
+        var preview = await Service.ScanAsync(Command, CancellationToken.None);
+        Assert.Equal(new MediaRecoveryBatchResult("OK", Confirmation.FileId, 1, 0, 0, 1), preview);
+        Assert.Empty(admission.Deliveries);
+        Assert.Empty(audit.Entries);
+
+        var applied = await Service.ScanAsync(Command with { Apply = true }, CancellationToken.None);
+
+        Assert.Equal(new MediaRecoveryBatchResult("OK", Confirmation.FileId, 1, 1, 0, 0), applied);
+        Assert.Empty(repository.Jobs);
+        var delivery = Assert.Single(admission.Deliveries);
+        Assert.Equal(Confirmation, delivery.Message);
+        Assert.Equal(MediaConfirmationCodec.Hash(Confirmation), delivery.Hash);
+        AssertAudit(Assert.Single(audit.Entries), Confirmation.CorrelationId, "success", "MEDIA_HISTORY_PROTECTION_RESTORED",
+            CancellationToken.None);
+        Assert.True(Assert.Single(admission.Transactions).Committed);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    public async Task ReservesConfirmationsAtOrAfterActivationForOrdinaryAdmissionAsync(int seconds)
+    {
+        var cutoff = Confirmation.ConfirmedAt.AddSeconds(seconds);
+        var result = await Service.ScanAsync(Command with { Apply = true, HistoricalBefore = cutoff }, CancellationToken.None);
+
+        Assert.Equal(new MediaRecoveryBatchResult("OK", Confirmation.FileId, 1, 0, 0, 0), result);
+        Assert.Equal(cutoff, Assert.Single(repository.Pages).HistoricalBefore);
+        Assert.Empty(repository.WorkReads);
+        Assert.Empty(repository.Jobs);
+        Assert.Empty(admission.Deliveries);
+        Assert.Empty(audit.Entries);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("future")]
+    [InlineData("non-UTC")]
+    public async Task RequiresAPastUtcActivationBoundaryBeforeReadingTheEventAsync(string boundary)
+    {
+        DateTimeOffset? cutoff = boundary switch
+        {
+            "missing" => null,
+            "future" => clock.Now.AddSeconds(1),
+            "non-UTC" => Activation.ToOffset(TimeSpan.FromHours(-3)),
+            _ => throw new ArgumentOutOfRangeException(nameof(boundary))
+        };
+
+        var result = await Service.ScanAsync(Command with { Apply = true, HistoricalBefore = cutoff }, CancellationToken.None);
+
+        Assert.Equal(new MediaRecoveryBatchResult("MEDIA_RECOVERY_INVALID_ARGUMENT", Command.AfterId, 0, 0, 0, 0), result);
+        Assert.Empty(repository.Pages);
+        Assert.Empty(audit.OperatorReads);
+    }
+
     [Theory]
     [InlineData("outbox conflict", "MEDIA_HISTORY_OUTBOX_CONFLICT")]
     [InlineData("wrong event outbox", "MEDIA_HISTORY_OUTBOX_CONFLICT")]
@@ -147,7 +209,7 @@ public sealed class MediaHistoryServiceTests
     [InlineData("checksum mismatch", "MEDIA_HISTORY_SOURCE_UNVERIFIED")]
     [InlineData("different original instant", "MEDIA_HISTORY_SOURCE_UNVERIFIED")]
     [InlineData("legacy work", "MEDIA_HISTORY_LEGACY_JOB_UNVERIFIED")]
-    [InlineData("job missing deduplication", "MEDIA_HISTORY_JOB_IDENTITY_CONFLICT")]
+    [InlineData("job confirmation identity changed", "MEDIA_HISTORY_JOB_IDENTITY_CONFLICT")]
     [InlineData("job mismatched hash", "MEDIA_HISTORY_JOB_IDENTITY_CONFLICT")]
     [InlineData("delivery without job", "MEDIA_HISTORY_WORK_CONFLICT")]
     [InlineData("variants without job", "MEDIA_HISTORY_WORK_CONFLICT")]
@@ -173,7 +235,7 @@ public sealed class MediaHistoryServiceTests
             case "checksum mismatch": repository.Sources[source.FileId] = source with { OriginalSha256 = new byte[32] }; break;
             case "different original instant": repository.Sources[source.FileId] = source with { FileConfirmedAt = source.FileConfirmedAt?.AddSeconds(1) }; break;
             case "legacy work": repository.Work = repository.Work with { JobId = 3 }; break;
-            case "job missing deduplication": repository.Work = EstablishedWork(); break;
+            case "job confirmation identity changed": repository.Work = EstablishedWork() with { MessageId = Guid.NewGuid() }; break;
             case "job mismatched hash":
                 repository.Work = EstablishedWork();
                 admission.Delivery = new(5, new byte[32], "completed");

@@ -6,7 +6,7 @@ namespace ScrapBook.UnitTests.Services;
 
 internal sealed class MediaHistoryRepositoryStub : IMediaHistoryRepository
 {
-    public List<(long EventId, long AfterId, int Limit, CancellationToken Token)> Pages { get; } = [];
+    public List<(long EventId, long AfterId, int Limit, DateTimeOffset HistoricalBefore, CancellationToken Token)> Pages { get; } = [];
     public List<(long EventId, long RecordId, long FileId, bool Locked, CancellationToken Token)> SourceReads { get; } = [];
     public List<(long EventId, long RecordId, CancellationToken Token)> ReceiptReads { get; } = [];
     public List<(long FileId, string Kind, int ProfileVersion, CancellationToken Token)> WorkReads { get; } = [];
@@ -18,10 +18,10 @@ internal sealed class MediaHistoryRepositoryStub : IMediaHistoryRepository
     public bool Inserted { get; set; } = true;
 
     public Task<IReadOnlyList<MediaHistoryCandidateModel>> FindPageAsync(long eventId, long afterId, int limit,
-        CancellationToken cancellationToken)
+        DateTimeOffset historicalBefore, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Pages.Add((eventId, afterId, limit, cancellationToken));
+        Pages.Add((eventId, afterId, limit, historicalBefore, cancellationToken));
         IReadOnlyList<MediaHistoryCandidateModel> files = Sources.Values
             .Where(item => item.EventId == eventId && item.FileId > afterId)
             .OrderBy(item => item.FileId).Take(limit)
