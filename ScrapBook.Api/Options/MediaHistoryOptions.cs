@@ -15,6 +15,6 @@ public static class MediaHistoryOptions
         {
             throw new StartupConfigurationException(key);
         }
-        return cutoff;
+        return cutoff.AddTicks(-(cutoff.UtcTicks % TimeSpan.TicksPerMicrosecond));
     }
 }
