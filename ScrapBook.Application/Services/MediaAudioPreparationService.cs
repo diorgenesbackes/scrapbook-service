@@ -32,9 +32,15 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
     private static readonly Counter<long> AudioInterventions = AudioMeter.CreateCounter<long>("scrapbook.media.audio.intervention");
     private static readonly Counter<long> VideoInterventions = VideoMeter.CreateCounter<long>("scrapbook.media.video.intervention");
 
-    public async Task<bool> PrepareNextAsync(CancellationToken cancellationToken)
+    public Task<bool> PrepareNextAsync(CancellationToken cancellationToken) =>
+        PrepareNextAsync(true, cancellationToken);
+
+    public Task<bool> PrepareNextAsync(bool allowHistorical, CancellationToken cancellationToken) =>
+        PrepareNextAsync(allowHistorical, false, cancellationToken);
+
+    public async Task<bool> PrepareNextAsync(bool allowHistorical, bool preferHistorical, CancellationToken cancellationToken)
     {
-        var claim = await ClaimAsync(cancellationToken);
+        var claim = await ClaimAsync(allowHistorical, preferHistorical, cancellationToken);
         if (claim.Work is { } work)
         {
             await AdvanceAsync(work, cancellationToken);
@@ -71,11 +77,17 @@ public sealed class MediaAudioPreparationService(IMediaAudioRepository repositor
             ProviderHash(plan.Settings, job.Id), externalId, Hash(externalId), payloadHash, clock.GetUtcNow(), cancellationToken);
     }
 
-    private async Task<(bool Found, MediaAudioWorkModel? Work)> ClaimAsync(CancellationToken cancellationToken)
+    private async Task<(bool Found, MediaAudioWorkModel? Work)> ClaimAsync(bool allowHistorical, bool preferHistorical,
+        CancellationToken cancellationToken)
     {
         await using var transaction = await repository.BeginAsync(cancellationToken);
         var now = clock.GetUtcNow();
-        var job = await repository.FindEligibleAudioAsync(now, cancellationToken);
+        var historicalFirst = allowHistorical && preferHistorical;
+        var job = await repository.FindEligibleAudioAsync(now, historicalFirst, cancellationToken);
+        if (job is null && allowHistorical)
+        {
+            job = await repository.FindEligibleAudioAsync(now, !historicalFirst, cancellationToken);
+        }
         if (job is null || !CanProcessFile(job.FileKind)) return (false, null);
 
         var confirmation = Confirmation(job);

@@ -17,13 +17,38 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
     private static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan PreparationBudget = TimeSpan.FromSeconds(75);
 
-    public Task<MediaFileProjectionModel?> GetFileAsync(long eventId, long recordId, long fileId,
-        CancellationToken cancellationToken) =>
-        repository.GetFileAsync(eventId, recordId, fileId, cancellationToken);
-
-    public async Task<bool> PrepareNextAsync(CancellationToken cancellationToken)
+    public async Task<MediaFileProjectionModel?> GetFileAsync(long eventId, long recordId, long fileId,
+        CancellationToken cancellationToken)
     {
-        var claim = await ClaimAsync(cancellationToken);
+        var file = await repository.GetFileAsync(eventId, recordId, fileId, cancellationToken);
+        if (file is null) return null;
+        if (file.State == "available" && HasAllReadyVariants(file)) return file;
+
+        var state = file.State switch
+        {
+            "not_requested" => "pending",
+            "available" => "failed",
+            _ => file.State
+        };
+        return file with { State = state, Variants = [] };
+    }
+
+    private static bool HasAllReadyVariants(MediaFileProjectionModel file) => file.Kind switch
+    {
+        "photo" => file.Variants is [{ Kind: "image" }, { Kind: "thumbnail" }],
+        "audio" or "video" => file.Variants is [{ Kind: "playback" }],
+        _ => false
+    };
+
+    public Task<bool> PrepareNextAsync(CancellationToken cancellationToken) =>
+        PrepareNextAsync(true, cancellationToken);
+
+    public Task<bool> PrepareNextAsync(bool allowHistorical, CancellationToken cancellationToken) =>
+        PrepareNextAsync(allowHistorical, false, cancellationToken);
+
+    public async Task<bool> PrepareNextAsync(bool allowHistorical, bool preferHistorical, CancellationToken cancellationToken)
+    {
+        var claim = await ClaimAsync(allowHistorical, preferHistorical, cancellationToken);
         if (claim.Work is { } work)
         {
             await PrepareAsync(work, cancellationToken);
@@ -31,11 +56,17 @@ public sealed class MediaPreparationService(IMediaPreparationRepository reposito
         return claim.Found;
     }
 
-    private async Task<(bool Found, PhotoPreparationWorkModel? Work)> ClaimAsync(CancellationToken cancellationToken)
+    private async Task<(bool Found, PhotoPreparationWorkModel? Work)> ClaimAsync(bool allowHistorical, bool preferHistorical,
+        CancellationToken cancellationToken)
     {
         await using var transaction = await repository.BeginAsync(cancellationToken);
         var now = clock.GetUtcNow();
-        var job = await repository.FindEligiblePhotoAsync(now, cancellationToken);
+        var historicalFirst = allowHistorical && preferHistorical;
+        var job = await repository.FindEligiblePhotoAsync(now, historicalFirst, cancellationToken);
+        if (job is null && allowHistorical)
+        {
+            job = await repository.FindEligiblePhotoAsync(now, !historicalFirst, cancellationToken);
+        }
         if (job is null) return (false, null);
 
         if (job.ActiveAttemptId is { } interrupted)

@@ -6,7 +6,7 @@ namespace ScrapBook.Domain.Interfaces;
 public interface IMediaPreparationRepository
 {
     Task<IEventTransaction> BeginAsync(CancellationToken cancellationToken);
-    Task<MediaJobEntity?> FindEligiblePhotoAsync(DateTimeOffset now, CancellationToken cancellationToken);
+    Task<MediaJobEntity?> FindEligiblePhotoAsync(DateTimeOffset now, bool historical, CancellationToken cancellationToken);
     Task<MediaSourceEntity?> FindSourceAsync(MediaConfirmationModel message, bool lockFile, CancellationToken cancellationToken);
     Task<long> StartPhotoAsync(MediaJobEntity job, string bucket, Guid lease, DateTimeOffset leaseUntil, Guid requestKey,
         string outputPrefix, int number, string[] variantKinds, DateTimeOffset now, CancellationToken cancellationToken);
